@@ -681,15 +681,30 @@ RegisterKeyBind(Key.F9, function()
 end)
 
 -- One loop, two jobs: drain queues and sample the pawn. UObject access has to
--- happen on the game thread; the queue drain does not, but doing both here keeps
+-- happen on the game thread; the queue drain does not, but doing both there keeps
 -- ordering obvious.
-LoopAsync(1000 // math.max(1, config.positionHz), function()
-    ExecuteInGameThread(function()
-        samplePosition()
-        pump()
+--
+-- LoopAsync is deprecated in current UE4SS in favour of
+-- LoopInGameThreadWithDelay, which runs on the game thread directly and so needs
+-- no ExecuteInGameThread wrapper. Preferred when present, with the old pair as a
+-- fallback so this works on older UE4SS builds too.
+local intervalMs = 1000 // math.max(1, config.positionHz)
+
+local function tick()
+    samplePosition()
+    pump()
+end
+
+if type(LoopInGameThreadWithDelay) == "function" and type(MakeActionHandle) == "function" then
+    LoopInGameThreadWithDelay(intervalMs, tick)
+elseif type(LoopAsync) == "function" then
+    LoopAsync(intervalMs, function()
+        ExecuteInGameThread(tick)
+        return false
     end)
-    return false
-end)
+else
+    print("[RP] No timer function available; position and chat will not update.\n")
+end
 
 notice("RP chat ready. F9 toggles the window, /help lists commands.")
 

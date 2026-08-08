@@ -11,11 +11,12 @@ Tick these off as you go. It is fine to stop anywhere and come back.
 - [x] **Part 1** — Node.js and Claude Code installed *(done: node v24.19.0, claude 2.1.226)*
 - [x] **Part 2** — key and backend URL collected *(done: key verified and already written into `src/key.h`)*
 - [x] **Part 3** — repo pushed to GitHub, CI running *(done: run #1, `host-tests` and `windows-crypto` both green first try)*
+- [x] **Part 4a** — Epic Games account linked, CI token added *(done: `EPIC_SUBMODULE_TOKEN` secret in place)*
 - [ ] **Part 4** — builds going green *(only `windows-dll` left)*
 - [ ] **Part 5** — mod installed into Palworld
 - [ ] **Part 6** — first run in game
 
-**You are in Part 4, with one job left to fix: `windows-dll`.**
+**You are in Part 4: Claude Code is wiring the token into `windows-dll` and switching to CMake.**
 
 ---
 
@@ -234,6 +235,77 @@ fails loudly and is easy to fix.
 
 ---
 
+## Part 4a — Epic Games source access (10 minutes, once) ✅ DONE
+
+UE4SS is built on a private Unreal headers repository that Epic hosts. To clone it
+you need your GitHub account linked to an Epic Games account. This is **free** and
+it is the normal, sanctioned process — not a paywall, not a workaround. Every
+person who builds a UE4SS C++ mod does this once.
+
+There is no way around it. Community mirrors of those headers exist; do not use
+them. They exist to route around Epic's access control, and building your mod on
+one puts you on the wrong side of a licence for no benefit when the official route
+is a signup form.
+
+### 4a.1 — Create or sign in to an Epic Games account
+
+<https://www.epicgames.com/account>
+
+If you have ever bought a game on the Epic store you already have one.
+
+### 4a.2 — Link GitHub to it
+
+1. Go to <https://www.epicgames.com/account/connections>
+2. Open the **Accounts** tab
+3. Find **GitHub** and click **Connect**
+4. Authorise it
+
+### 4a.3 — Accept the organisation invite
+
+Epic emails you an invitation to join the **@EpicGames** GitHub organisation.
+**This step is easy to miss and nothing works without it.** Check the inbox for
+your GitHub account's email address, including spam.
+
+You can confirm it worked at <https://github.com/settings/organizations> — you
+should see **EpicGames** listed.
+
+> The invite can take a few minutes to arrive. If it has not shown up after an
+> hour, unlink and relink in step 4a.2.
+
+### 4a.4 — Create a token so the build machine can clone it too
+
+Your own access is not enough: the cloud build machine needs to authenticate as
+you when it clones that private repository.
+
+1. Go to <https://github.com/settings/tokens> → **Tokens (classic)** →
+   **Generate new token (classic)**
+2. Note: `UE4SS submodule access`
+3. Expiration: 90 days is a reasonable default
+4. Scopes: tick **`repo`** only — nothing else
+5. Generate, and **copy the token now**. GitHub shows it exactly once.
+
+### 4a.5 — Give it to the build
+
+1. Open your `palworld-rp-mod` repo on GitHub
+2. **Settings** → **Secrets and variables** → **Actions**
+3. **New repository secret**
+4. Name: `EPIC_SUBMODULE_TOKEN`
+5. Value: the token you copied
+6. **Add secret**
+
+A secret is write-only from the outside: the build can use it, nobody can read it
+back off the page, and it is not in your repository's files.
+
+**Treat it like a password.** It can act as you on GitHub. If you ever paste it
+somewhere by accident, delete it at <https://github.com/settings/tokens> — that
+instantly makes the leaked copy useless.
+
+When the token expires in 90 days the `windows-dll` job will start failing to
+clone. That is the expected symptom, not a code regression: generate a new token
+and update the secret.
+
+---
+
 ## Part 4 — The build loop
 
 This is where most of the time goes. The pattern is always the same: Claude Code
@@ -256,13 +328,35 @@ proven to work and to interoperate with what your server expects.
 
 Then:
 
-> Now get `windows-dll` producing a DLL. The reconnaissance step in the workflow
-> prints the real UE4SS layout — read that log before editing xmake.lua.
+> Now get `windows-dll` producing a DLL. It builds with CMake against the real
+> UE4SS source tree — read the failing step's log before changing anything.
 
 **Your key is already in `src/key.h`**, so there is nothing to do here. It was
 verified before being written, which matters: a mistyped key produces a mod that
 encrypts perfectly and is unreadable by everyone else, with no error to explain
 why.
+
+### Reading the next few failures
+
+`windows-dll` will still go red a few times. Which step it dies on tells you what
+kind of problem it is, and only one of the three is worth your attention:
+
+| Where it fails | What it means | Who fixes it |
+|---|---|---|
+| the **submodule clone**, with 403 / authentication / "repository not found" | the token or the org invite is not right | **you** — see below |
+| **CMake configure**, or a missing dependency | ordinary build plumbing | Claude Code |
+| **compiling our own files** in `src/` | the real work, and the expected path | Claude Code |
+
+The first one is the only one that comes back to you. If the clone itself is
+refused, check in this order:
+
+1. **The org invite was actually accepted.** Go to
+   <https://github.com/settings/organizations> — **EpicGames** must be listed.
+   This is the single most common cause, because the invite arrives by email and is
+   easy to leave sitting there.
+2. **The secret name is exactly `EPIC_SUBMODULE_TOKEN`.** No trailing space, right
+   capitalisation.
+3. **The token has `repo` scope** and has not expired.
 
 ### If it gets stuck
 
@@ -303,7 +397,10 @@ Mods\PalworldRpChat\
     └── json.lua
 ```
 
-The rename is not optional — UE4SS looks for `dlls\main.dll` specifically.
+**About that rename:** older UE4SS looks for `dlls\main.dll` specifically, but a
+recent version added support for naming the DLL after the mod instead. Claude Code
+will tell you which your build needs. If in doubt, `main.dll` is the form that
+works on both.
 
 Then open `Mods\mods.txt` in Notepad and add this line:
 

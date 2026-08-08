@@ -95,6 +95,109 @@ the TLS suite only covers metadata and the password exchange, and AES-128-GCM is
 not weak. If the "AES-256 twice over" claim is wanted, vendor ixwebsocket and add
 one `mbedtls_ssl_conf_ciphersuites` call (BSD-3, two-line patch).
 
+## The UE4SS build: use CMake, not xmake
+
+`windows-dll` was blocked for 6 CI runs. The diagnosis was correct but the fix is
+upstream of it.
+
+**What was happening.** `add_rules("ue4ss.mod")` makes the mod depend on UE4SS's
+core target, which drags in all of UE4SS's own packages. One of them, `raw_pdb`,
+is requested by git tag `v1.0.0`. Looking at xmake-repo's package definition, a
+gitref takes the branch that calls `cmake --install` — but raw_pdb v1.0.0 predates
+having an `install()` rule, so `ninja install` dies with "unknown target
+'install'". The registered versions (`2024.08.27`, `2022.10.17`) would have taken
+a different branch that copies files manually. So it is a genuine upstream
+packaging incompatibility, not a runner problem, and no amount of retrying or
+pinning the runner image fixes it.
+
+**Why not just patch raw_pdb.** You could ship a local xmake repo overriding that
+package. It would probably work. Do not bother, because:
+
+> "Added CMake build system alongside Xmake — CMake >= 3.22 is now supported as
+> the **default build system**. Documentation updated to reference CMake build
+> instructions. **xmake may be deprecated in the future. Meanwhile, we cannot
+> guarantee ABI compatibility.**"
+> — RE-UE4SS changelog, PR #1067
+
+Two things follow. The xmake path is being abandoned upstream, so patching it buys
+a fix with a shelf life. And more seriously, **a mod built with xmake may be ABI
+incompatible with a UE4SS built with CMake** — which is what shipped releases now
+are. That is not a build error; it is a mod that loads and then misbehaves or
+crashes, which is far worse than a red CI job.
+
+**Direction, in order of preference:**
+
+1. **CMake against the UE4SS source tree.** Now the documented default. Sidesteps
+   xmake-repo entirely. `xmake.lua` in this repo becomes dead weight — delete it
+   rather than leaving two build files to drift apart.
+2. **If CMake still wants the full dependency tree**, skip building UE4SS at all:
+   the releases include a **`zDEV`** package intended for mod developers, with the
+   headers and import library. Compile our DLL against those with plain CMake or
+   `cl`. We have already proven MSVC compiles this codebase — `windows-crypto` is
+   green — so this is only a matter of include paths and one import lib.
+
+Do not clone submodules recursively either way. `Re-UE4SS/UEPseudo` currently 404s
+upstream, and the submodules exist to build UE4SS itself, which is what we are
+trying to avoid doing.
+
+## Epic Games source access is required, and that is settled
+
+UE4SS's build pulls a **private** Unreal-headers submodule hosted in the
+`@EpicGames` GitHub organisation. Cloning it needs a GitHub account linked to an
+Epic Games account plus an accepted org invite. This is true for CMake and xmake
+alike — it is upstream of the build system, so switching build systems does not
+avoid it.
+
+**The decision: the owner links the accounts and supplies a token to CI.** Free,
+about ten minutes of clicking, done once. `GETTING-STARTED.md` Part 4a walks
+through it.
+
+- The token lives in the repo secret **`EPIC_SUBMODULE_TOKEN`** (classic PAT,
+  `repo` scope only). `windows-dll` must use it to authenticate the submodule
+  clone — rewrite the submodule URL to an authenticated HTTPS form rather than
+  trying to use SSH, which needs a key the runner does not have.
+- **Never echo the token**, and never let it reach the build log. Mask it, use
+  `git config url.<...>.insteadOf`, or pass it via `extraheader`.
+- **Do not upload Epic's headers in an artifact and do not commit them.** Using the
+  source is fine under the owner's licence; redistributing it is not. The artifact
+  ships only our compiled DLL and our Lua scripts.
+- The PAT expires. When it does, `windows-dll` starts failing at the clone step —
+  that is a token renewal, not a code regression. Say so plainly rather than
+  debugging the build.
+
+### Options that were considered and rejected
+
+- **Leave `windows-dll` red and build locally.** This is what a previous session
+  recommended, and it is wrong for this owner: they explicitly asked not to have to
+  compile anything themselves. Cloud building is the entire reason the CI exists.
+  Do not re-propose it.
+- **A community/unofficial mirror of the Unreal headers.** Rejected on principle.
+  Those mirrors exist to bypass Epic's access control, and the official route is a
+  signup form. Do not suggest it again.
+- **Dropping the UE4SS C++ API** (standalone Lua C module, or a companion process
+  with its own window). Genuinely viable and needs no Epic account — but it trades
+  a ten-minute form for two fresh unknowns: whether UE4SS exports the Lua API
+  symbols a C module would need, and a replacement for the in-game ImGui window.
+  Keep it as the fallback only if the Epic route somehow fails.
+
+## Two C++ API details that came out of the same changelog
+
+Both are already fixed in `src/dllmain.cpp`; do not undo them.
+
+1. **ImGui setup goes in `on_ui_init()`, never the constructor.** UE4SS's docs say
+   `UE4SS_ENABLE_IMGUI()` is intended for `on_ui_init`, and "failing to do so will
+   cause a crash when you try to render something with imgui". Using it in a
+   constructor separately caused a race (UE4SS #481). `register_tab` moved there
+   too.
+2. **`ExecuteAsync` and `LoopAsync` are deprecated** in favour of
+   `LoopInGameThreadWithDelay`, which runs on the game thread and needs no
+   `ExecuteInGameThread` wrapper. `main.lua` prefers the new one and falls back.
+
+Also worth knowing for install instructions: UE4SS #1313 added "support for using
+mod name as the main dll name for C++ mods", so `PalworldRpChat.dll` may not need
+renaming to `main.dll` on current builds. Verify against the shipped version
+rather than assuming either way.
+
 ## Backend contract — targeting v2.6.1
 
 `API.md`, `src/chat.js`, `src/rest.js` and `src/envelope.js` in the backend repo
@@ -183,8 +286,8 @@ where they were written.
 1. `src/dllmain.cpp` — `on_lua_start`'s signature and `LuaMadeSimple`'s
    `get_*`/`set_*` argument helpers have both changed across UE4SS releases. If
    the mod fails to load, start here.
-2. `xmake.lua` — the `ue4ss.mod` rule name and the mods directory are guesses. The
-   CI reconnaissance step prints the real answers from a live checkout.
+2. `CMakeLists.txt` — built against UE4SS's own `UE4SS` CMake target per
+   `docs/guides/creating-a-c++-mod.md`, not yet confirmed green in CI.
 3. `Scripts/json.lua` — unexecuted. Give it a pass before trusting it.
 4. `Scripts/main.lua` — the pawn position path (`UEHelpers.GetPlayerController()`,
    `pawn:K2_GetActorLocation()`) needs checking against Palworld specifically.
@@ -216,12 +319,12 @@ contract moved — keep it that way.
 |---|---|---|
 | `host-tests` | g++, node | green |
 | `windows-crypto` | MSVC, node — **no UE4SS** | green after the first fixes |
-| `windows-dll` | MSVC, xmake, UE4SS source | fails first; `continue-on-error: true` |
+| `windows-dll` | MSVC, CMake, vcpkg, UE4SS source, `EPIC_SUBMODULE_TOKEN` | fails first; `continue-on-error: true` |
 
 The split is deliberate: a UE4SS path detail must not block verification of the
-crypto and protocol work. `windows-dll` has a reconnaissance step that prints the
-UE4SS layout, rule names and build modes from a real checkout — read its log
-before editing `xmake.lua`, and flip `continue-on-error` to `false` once green.
+crypto and protocol work. `windows-dll` builds against a full `RE-UE4SS` source
+checkout via CMake — read the failing step's log before changing `CMakeLists.txt`
+or the workflow, and flip `continue-on-error` to `false` once it goes green.
 
 ## Before the mod can run
 
@@ -252,7 +355,7 @@ Then create the GitHub remote and push, which is what makes CI start running.
 1. Get `windows-crypto` green. It has no UE4SS dependency, so it is pure signal
    about `crypto.hpp`, and it validates the one thing that is unreadable-in-game
    when wrong.
-2. Fix `xmake.lua` from the reconnaissance log, get `windows-dll` producing a DLL.
+2. Get `windows-dll` producing a DLL via the CMake pipeline.
 3. Fix `on_lua_start` / `LuaMadeSimple` against the shipped UE4SS version.
 4. Run `Scripts/json.lua` under a real Lua 5.4 and fix what breaks.
 5. Only then test in game: `/health` reachable → login → `/s` → `chat_receive`.

@@ -73,14 +73,11 @@ jobs:
   windows-dll:
     name: windows DLL (UE4SS mod)
     runs-on: windows-latest
-    # BLOCKED, not just "expected to fail": building PalworldRpChat pulls in
-    # UE4SS's own core target (the ue4ss.mod rule depends on it), which needs
-    # xmake-repo's raw_pdb v1.0.0 package. That package's CMakeLists.txt defines
-    # no install() rule, so `ninja install` dies with "unknown target 'install'".
-    # Confirmed on both windows-latest and windows-2022 — not a runner-image
-    # fluke, an upstream xmake-repo/raw_pdb packaging bug. See GETTING-STARTED.md
-    # for the options (xmake-repo issue, package override, or vendoring UE4SS's
-    # own prebuilt import lib instead of building it from source).
+    # xmake is retired for this job — see "The UE4SS build: use CMake, not
+    # xmake" in CLAUDE.md. CMake >= 3.22 is UE4SS's own documented default,
+    # confirmed against docs/guides/creating-a-c++-mod.md and RE-UE4SS's own
+    # cmake_build_ue4ss.yml. Still marked continue-on-error until a run has
+    # actually gone green with this pipeline — flip it once it has.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -89,79 +86,70 @@ jobs:
 
       - uses: ilammy/msvc-dev-cmd@v1
 
-      - uses: xmake-io/github-action-setup-xmake@v1
-        with:
-          xmake-version: latest
+      # UE4SS's own CMakeLists.txt add_subdirectory()s deps/first/Unreal
+      # unconditionally to build its core target — which any real C++ mod
+      # links against, xmake or CMake, doesn't matter. That submodule
+      # (Re-UE4SS/UEPseudo) is private, gated behind Epic Games' Unreal
+      # source-access program. EPIC_SUBMODULE_TOKEN is a classic PAT (repo
+      # scope only) from an account the repo owner has linked and had
+      # accepted into the @EpicGames org — see GETTING-STARTED.md Part 4a.
+      #
+      # HTTPS with the token embedded via url.insteadOf, not SSH: the runner
+      # has no SSH key. git does not print the rewritten URL at this
+      # verbosity, and GitHub Actions masks the literal secret value in any
+      # log output regardless, so it never surfaces even if that changes.
+      - name: Authenticate the private Unreal submodule
+        shell: bash
+        run: |
+          git config --global url."https://x-access-token:${EPIC_TOKEN}@github.com/".insteadOf "git@github.com:"
+        env:
+          EPIC_TOKEN: ${{ secrets.EPIC_SUBMODULE_TOKEN }}
 
-      # Shallow, and deliberately NOT --recursive: the submodules (deps/first/Unreal,
-      # deps/first/patternsleuth) are only needed to build UE4SS itself from source.
-      # We only need its headers and Mods/ convention to compile a mod against it.
-      # (One of those submodules, Re-UE4SS/UEPseudo, currently 404s upstream anyway —
-      # another reason not to depend on it.)
-      - name: Clone RE-UE4SS
+      - name: Clone RE-UE4SS with submodules
         run: >
-          git clone --depth 1
+          git clone --depth 1 --recursive --shallow-submodules
           https://github.com/UE4SS-RE/RE-UE4SS.git ue4ss
 
-      # This step exists to answer, from a real checkout, the question the mod's
-      # xmake.lua currently guesses at: where do C++ mods live, and what is the
-      # rule called? Its log is the input to fixing the build.
-      - name: Reconnaissance — locate the C++ mod convention
-        shell: bash
-        run: |
-          echo "== top level =="
-          ls ue4ss
-          echo
-          echo "== directories named Mods =="
-          find ue4ss -maxdepth 4 -type d -name 'Mods' -not -path '*/deps/*' || true
-          echo
-          echo "== candidate C++ mod templates (an xmake.lua beside a dllmain) =="
-          find ue4ss -maxdepth 5 -iname 'dllmain.cpp' -not -path '*/deps/*' || true
-          echo
-          echo "== rules UE4SS defines for mods =="
-          grep -rn 'rule("ue4ss' ue4ss --include='*.lua' | head -20 || true
-          grep -rn 'add_rules("ue4ss' ue4ss --include='*.lua' | head -20 || true
-          echo
-          echo "== build modes =="
-          grep -rn 'set_allowedmodes\|Shipping__Win64' ue4ss/xmake.lua | head -20 || true
+      # ixwebsocket and nlohmann_json used to come from xmake's add_requires.
+      # vcpkg replaces that: it ships pre-bootstrapped on this runner image
+      # (VCPKG_ROOT is already set), and ixwebsocket's vcpkg port already
+      # selects mbedTLS as its default SSL backend on Windows, matching the
+      # old `configs = { ssl = "mbedtls" }`.
+      - name: Install ixwebsocket + nlohmann_json via vcpkg
+        run: & "$env:VCPKG_ROOT\vcpkg.exe" install ixwebsocket:x64-windows nlohmann-json:x64-windows
 
-      - name: Place the mod in the UE4SS tree
+      # The official pattern (docs/guides/creating-a-c++-mod.md): a small
+      # top-level project that add_subdirectory()s RE-UE4SS and the mod as
+      # siblings. This file is generated per-run, not committed — it only
+      # makes sense next to a fresh ue4ss/ checkout.
+      - name: Write the top-level CMake project
         shell: bash
         run: |
-          # ue4ss/assets/Mods is asset data, not where C++ mod sources live.
-          # Real C++ mods (EventViewerMod, KismetDebuggerMod) sit directly under
-          # cppmods/, confirmed by the reconnaissance step above.
-          DEST="ue4ss/cppmods/PalworldRpChat"
-          mkdir -p "$DEST"
-          cp -r mod/src mod/xmake.lua "$DEST"/
-          ls -R "$DEST" | head -30
+          cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.22)
+          project(PalworldRpChatBuild)
+          add_subdirectory(ue4ss)
+          add_subdirectory(mod)
+          EOF
+
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Game__Shipping__Win64
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
-        working-directory: ue4ss
-        run: |
-          # -v: the ue4ss.mod rule makes every mod depend on the UE4SS core
-          # target, which pulls in UE4SS's own dependencies (raw_pdb, glaze,
-          # ImGuiTextEdit, glfw, fmt, zydis, polyhook_2, ...). If one fails to
-          # install, the default output only points at a log file this runner
-          # doesn't expose — verbose mode inlines the real compiler/cmake error.
-          xmake f -m "Game__Shipping__Win64" -y -v
-          xmake build -v PalworldRpChat
-
-      - name: Dump package install logs on failure
-        if: failure()
-        shell: bash
-        run: |
-          find "$LOCALAPPDATA/.xmake/cache/packages" -path '*installdir.failed/logs/*' -type f 2>/dev/null | while read -r f; do
-            echo "===== $f ====="
-            cat "$f"
-          done || true
+        run: cmake --build build --target PalworldRpChat
 
       - name: Collect the DLL
         if: always()
         shell: bash
         run: |
           mkdir -p out/PalworldRpChat/Scripts
-          find ue4ss -name 'PalworldRpChat.dll' -exec cp {} out/PalworldRpChat/ \; || true
+          # Only our own compiled DLL and our own Lua scripts. Nothing from
+          # ue4ss/ (Epic-derived headers, UE4SS.dll, its own assets) belongs
+          # in this artifact — see CLAUDE.md.
+          find build -iname 'PalworldRpChat.dll' -exec cp {} out/PalworldRpChat/ \; || true
           cp mod/Scripts/*.lua out/PalworldRpChat/Scripts/ || true
           cp mod/README.md out/ || true
           find out -type f

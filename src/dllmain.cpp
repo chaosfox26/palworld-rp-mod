@@ -380,10 +380,12 @@ public:
         ModDescription = STR("Roleplay chat: local, emote, whisper, party, guild, global, channels.");
         ModAuthors = STR("chaosfox26");
 
-        // UE4SS ships ImGui and exposes it to C++ mods, so the DLL we needed for
-        // the socket also gives us the input box the game's own chat cannot
-        // provide.
-        register_tab(STR("RP Chat"), [](CppUserModBase*) { renderChatWindow(); });
+        // NOTHING ImGui-RELATED GOES IN THE CONSTRUCTOR.
+        //
+        // UE4SS fixed "a crash caused by a race condition enabled by C++ mods
+        // using UE4SS_ENABLE_IMGUI in their constructor" (#481), and the UI is not
+        // initialised this early anyway. Both the macro and register_tab belong in
+        // on_ui_init(). See below.
     }
 
     ~PalworldRpMod() override
@@ -397,6 +399,22 @@ public:
     void on_unreal_init() override
     {
         uiLog("RP chat loaded. Open the RP Chat tab, then log in.");
+    }
+
+    // The only correct place for ImGui setup.
+    //
+    // UE4SS docs are explicit: UE4SS_ENABLE_IMGUI() is intended to be used here,
+    // and "failing to do so will cause a crash when you try to render something
+    // with imgui". Calling it in the constructor is separately known to race
+    // (fixed in UE4SS #481, but the fix was to stop doing it).
+    void on_ui_init() override
+    {
+        UE4SS_ENABLE_IMGUI();
+
+        // UE4SS ships ImGui and exposes it to C++ mods, so the DLL we needed for
+        // the socket also gives us the input box the game's own chat cannot
+        // provide.
+        register_tab(STR("RP Chat"), [](CppUserModBase*) { renderChatWindow(); });
     }
 
     // NOTE: verify this signature against your UE4SS version — it has changed.
