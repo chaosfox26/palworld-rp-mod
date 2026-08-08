@@ -116,7 +116,8 @@ jobs:
       # selects mbedTLS as its default SSL backend on Windows, matching the
       # old `configs = { ssl = "mbedtls" }`.
       - name: Install ixwebsocket + nlohmann_json via vcpkg
-        run: & "$env:VCPKG_ROOT\vcpkg.exe" install ixwebsocket:x64-windows nlohmann-json:x64-windows
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg.exe" install ixwebsocket:x64-windows nlohmann-json:x64-windows
 
       # The official pattern (docs/guides/creating-a-c++-mod.md): a small
       # top-level project that add_subdirectory()s RE-UE4SS and the mod as
