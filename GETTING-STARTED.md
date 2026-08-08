@@ -10,12 +10,12 @@ Tick these off as you go. It is fine to stop anywhere and come back.
 
 - [x] **Part 1** — Node.js and Claude Code installed *(done: node v24.19.0, claude 2.1.226)*
 - [x] **Part 2** — key and backend URL collected *(done: key verified and already written into `src/key.h`)*
-- [ ] **Part 3** — repo pushed to GitHub, CI running
-- [ ] **Part 4** — builds going green
+- [x] **Part 3** — repo pushed to GitHub, CI running *(done: run #1, `host-tests` and `windows-crypto` both green first try)*
+- [ ] **Part 4** — builds going green *(only `windows-dll` left)*
 - [ ] **Part 5** — mod installed into Palworld
 - [ ] **Part 6** — first run in game
 
-**You are at the start of Part 3.**
+**You are in Part 4, with one job left to fix: `windows-dll`.**
 
 ---
 
@@ -207,14 +207,30 @@ public, generate a new key first.
 When it says the workflow is running, go look: on github.com open your repo and
 click the **Actions** tab. You will see three jobs.
 
-| Job | What it is | Expect |
-|---|---|---|
-| `host-tests` | checks the maths and message formatting | ✅ green |
-| `windows-crypto` | checks the encryption on a real Windows machine | ❌ red at first |
-| `windows-dll` | builds the actual mod file | ❌ red at first, marked "expected" |
+| Job | What it is | Expect | Actual (run #1) |
+|---|---|---|---|
+| `host-tests` | checks the maths and message formatting | ✅ green | ✅ green, 8s |
+| `windows-crypto` | checks the encryption on a real Windows machine | ❌ red at first | ✅ **green first try**, 33s |
+| `windows-dll` | builds the actual mod file | ❌ red at first | ❌ red, 55s — as expected |
 
-**Two red marks here is success.** It means the cloud machines ran and told us
-what is wrong. Red on `host-tests` would be surprising — mention it if you see it.
+**Red on `windows-dll` is success at this stage.** It means the cloud machine ran
+and told us what is wrong.
+
+`windows-crypto` passing on the first attempt is genuinely good news, and worth
+understanding, because it retires most of the risk in this project. It proves, on a
+real Windows machine:
+
+- `crypto.hpp` compiles under Microsoft's compiler with no errors
+- Windows' AES-256-GCM produces envelopes Node can decrypt, and reads envelopes
+  Node produced — **both directions**
+- the base64 is byte-identical to what your server expects
+- tampered messages are rejected rather than silently returning garbage
+- the size caps behave at their exact boundaries
+
+That was the failure mode with no symptom: chat that looks like it works but shows
+`[unreadable]` to everyone. It is now ruled out. What is left in `windows-dll` is
+plumbing — where UE4SS keeps its mods and what its build rule is called — which
+fails loudly and is easy to fix.
 
 ---
 

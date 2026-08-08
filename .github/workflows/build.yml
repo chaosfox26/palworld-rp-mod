@@ -90,10 +90,13 @@ jobs:
           xmake-version: latest
 
       # Shallow, because the full history with submodules is large and none of it
-      # is needed to compile against the headers.
+      # is needed to compile against the headers. RE-UE4SS's .gitmodules points
+      # submodules at git@github.com: SSH URLs; the runner has no SSH key, so
+      # rewrite those to HTTPS before cloning recursively.
       - name: Clone RE-UE4SS
         run: >
-          git clone --depth 1 --recursive --shallow-submodules
+          git -c url."https://github.com/".insteadOf="git@github.com:"
+          clone --depth 1 --recursive --shallow-submodules
           https://github.com/UE4SS-RE/RE-UE4SS.git ue4ss
 
       # This step exists to answer, from a real checkout, the question the mod's
