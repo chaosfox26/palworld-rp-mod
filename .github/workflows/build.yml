@@ -124,8 +124,10 @@ jobs:
       - name: Place the mod in the UE4SS tree
         shell: bash
         run: |
-          # Verify this destination against the reconnaissance output above.
-          DEST="ue4ss/UE4SS/Mods/PalworldRpChat"
+          # ue4ss/assets/Mods is asset data, not where C++ mod sources live.
+          # Real C++ mods (EventViewerMod, KismetDebuggerMod) sit directly under
+          # cppmods/, confirmed by the reconnaissance step above.
+          DEST="ue4ss/cppmods/PalworldRpChat"
           mkdir -p "$DEST"
           cp -r mod/src mod/xmake.lua "$DEST"/
           ls -R "$DEST" | head -30
@@ -133,8 +135,22 @@ jobs:
       - name: Build
         working-directory: ue4ss
         run: |
-          xmake f -m "Game__Shipping__Win64" -y
+          # -v: the ue4ss.mod rule makes every mod depend on the UE4SS core
+          # target, which pulls in UE4SS's own dependencies (raw_pdb, glaze,
+          # ImGuiTextEdit, glfw, fmt, zydis, polyhook_2, ...). If one fails to
+          # install, the default output only points at a log file this runner
+          # doesn't expose — verbose mode inlines the real compiler/cmake error.
+          xmake f -m "Game__Shipping__Win64" -y -v
           xmake build -v PalworldRpChat
+
+      - name: Dump package install logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          find "$LOCALAPPDATA/.xmake/cache/packages" -path '*installdir.failed/logs/*' -type f 2>/dev/null | while read -r f; do
+            echo "===== $f ====="
+            cat "$f"
+          done || true
 
       - name: Collect the DLL
         if: always()
