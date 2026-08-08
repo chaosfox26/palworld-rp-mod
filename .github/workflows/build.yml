@@ -110,19 +110,17 @@ jobs:
           git clone --depth 1 --recursive --shallow-submodules
           https://github.com/UE4SS-RE/RE-UE4SS.git ue4ss
 
-      # ixwebsocket and nlohmann_json used to come from xmake's add_requires.
-      # vcpkg replaces that: it ships pre-bootstrapped on this runner image
-      # (VCPKG_ROOT is already set), and ixwebsocket's vcpkg port already
-      # selects mbedTLS as its default SSL backend on Windows, matching the
-      # old `configs = { ssl = "mbedtls" }`.
-      - name: Install ixwebsocket + nlohmann_json via vcpkg
-        run: |
-          & "$env:VCPKG_ROOT\vcpkg.exe" install ixwebsocket:x64-windows nlohmann-json:x64-windows
-
       # The official pattern (docs/guides/creating-a-c++-mod.md): a small
       # top-level project that add_subdirectory()s RE-UE4SS and the mod as
-      # siblings. This file is generated per-run, not committed — it only
-      # makes sense next to a fresh ue4ss/ checkout.
+      # siblings. Both files here are generated per-run, not committed — they
+      # only make sense next to a fresh ue4ss/ checkout.
+      #
+      # ixwebsocket and nlohmann_json used to come from xmake's add_requires;
+      # vcpkg.json replaces that. This runner's bundled vcpkg is manifest-mode
+      # only (classic `vcpkg install <port>` is disabled), so the manifest is
+      # what makes the toolchain file below install these automatically during
+      # cmake configure. ixwebsocket's vcpkg port already selects mbedTLS as
+      # its default SSL backend on Windows, matching the old `ssl = "mbedtls"`.
       - name: Write the top-level CMake project
         shell: bash
         run: |
@@ -132,12 +130,20 @@ jobs:
           add_subdirectory(ue4ss)
           add_subdirectory(mod)
           EOF
+          cat > vcpkg.json <<'EOF'
+          {
+            "name": "palworld-rp-chat-build",
+            "version": "0.1.0",
+            "dependencies": ["ixwebsocket", "nlohmann-json"]
+          }
+          EOF
 
       - name: Configure
         run: >
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Game__Shipping__Win64
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
         run: cmake --build build --target PalworldRpChat
