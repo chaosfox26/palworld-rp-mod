@@ -72,17 +72,15 @@ jobs:
 
   windows-dll:
     name: windows DLL (UE4SS mod)
-    # Pinned rather than windows-latest: on windows-latest's current image,
-    # xmake-repo's raw_pdb v1.0.0 recipe fails ("ninja: error: unknown target
-    # 'install'") because raw_pdb's CMakeLists.txt defines no install() rule and
-    # something in that newer toolchain surfaces it as fatal instead of a no-op.
-    # windows-2022 is the combination the xmake-repo raw_pdb package was actually
-    # tested against.
-    runs-on: windows-2022
-    # EXPECTED TO FAIL ON THE FIRST RUN. The UE4SS mod directory layout and the
-    # xmake rule name have both changed across releases, and nothing here has
-    # been built on Windows yet. Read the reconnaissance step's output, fix
-    # xmake.lua, then flip this to false.
+    runs-on: windows-latest
+    # BLOCKED, not just "expected to fail": building PalworldRpChat pulls in
+    # UE4SS's own core target (the ue4ss.mod rule depends on it), which needs
+    # xmake-repo's raw_pdb v1.0.0 package. That package's CMakeLists.txt defines
+    # no install() rule, so `ninja install` dies with "unknown target 'install'".
+    # Confirmed on both windows-latest and windows-2022 — not a runner-image
+    # fluke, an upstream xmake-repo/raw_pdb packaging bug. See GETTING-STARTED.md
+    # for the options (xmake-repo issue, package override, or vendoring UE4SS's
+    # own prebuilt import lib instead of building it from source).
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
