@@ -1,0 +1,153 @@
+name: build
+
+# Three jobs, deliberately separated by how likely they are to work:
+#
+#   host-tests      pure C++ and Node, no platform deps. Should always be green.
+#   windows-crypto  MSVC + BCrypt, but NO UE4SS. Proves the encryption
+#                   interoperates with Node in both directions.
+#   windows-dll     the real artifact. Needs the UE4SS source tree and is the
+#                   only job with genuine unknowns in it.
+#
+# The split matters: if windows-dll fails on a UE4SS path detail, the crypto and
+# protocol work is still verified rather than being blocked behind it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    name: host tests (protocol + base64 interop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build and run
+        working-directory: tests
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -I../src test_protocol.cpp -o test_protocol
+          g++ -std=c++17 -Wall -Wextra -Werror -I../src test_envelope.cpp -o test_envelope
+          ./test_protocol
+          node envelope_interop.js emit | ./test_envelope | node envelope_interop.js check
+
+  windows-crypto:
+    name: windows crypto (BCrypt <-> Node interop)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      # /W4 rather than /WX for now: these files have never been through MSVC and
+      # the first pass will surface warnings worth reading rather than silencing.
+      - name: Compile with MSVC
+        shell: cmd
+        working-directory: tests
+        run: |
+          cl /std:c++17 /EHsc /W4 /nologo /I..\src test_protocol.cpp /Fe:test_protocol.exe
+          cl /std:c++17 /EHsc /W4 /nologo /I..\src test_crypto_win.cpp /Fe:test_crypto_win.exe /link bcrypt.lib
+
+      - name: Protocol tests under MSVC
+        shell: cmd
+        working-directory: tests
+        run: test_protocol.exe
+
+      # Node seals, C++ opens; then C++ seals, Node opens. Disagreement about tag
+      # placement, IV length or base64 canonicality shows up here rather than as
+      # "[unreadable]" on every line in game.
+      - name: Encryption interop, both directions
+        shell: cmd
+        working-directory: tests
+        run: node envelope_interop.js emit | test_crypto_win.exe | node envelope_interop.js verify
+
+  windows-dll:
+    name: windows DLL (UE4SS mod)
+    runs-on: windows-latest
+    # EXPECTED TO FAIL ON THE FIRST RUN. The UE4SS mod directory layout and the
+    # xmake rule name have both changed across releases, and nothing here has
+    # been built on Windows yet. Read the reconnaissance step's output, fix
+    # xmake.lua, then flip this to false.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: mod
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: latest
+
+      # Shallow, because the full history with submodules is large and none of it
+      # is needed to compile against the headers.
+      - name: Clone RE-UE4SS
+        run: >
+          git clone --depth 1 --recursive --shallow-submodules
+          https://github.com/UE4SS-RE/RE-UE4SS.git ue4ss
+
+      # This step exists to answer, from a real checkout, the question the mod's
+      # xmake.lua currently guesses at: where do C++ mods live, and what is the
+      # rule called? Its log is the input to fixing the build.
+      - name: Reconnaissance — locate the C++ mod convention
+        shell: bash
+        run: |
+          echo "== top level =="
+          ls ue4ss
+          echo
+          echo "== directories named Mods =="
+          find ue4ss -maxdepth 4 -type d -name 'Mods' -not -path '*/deps/*' || true
+          echo
+          echo "== candidate C++ mod templates (an xmake.lua beside a dllmain) =="
+          find ue4ss -maxdepth 5 -iname 'dllmain.cpp' -not -path '*/deps/*' || true
+          echo
+          echo "== rules UE4SS defines for mods =="
+          grep -rn 'rule("ue4ss' ue4ss --include='*.lua' | head -20 || true
+          grep -rn 'add_rules("ue4ss' ue4ss --include='*.lua' | head -20 || true
+          echo
+          echo "== build modes =="
+          grep -rn 'set_allowedmodes\|Shipping__Win64' ue4ss/xmake.lua | head -20 || true
+
+      - name: Place the mod in the UE4SS tree
+        shell: bash
+        run: |
+          # Verify this destination against the reconnaissance output above.
+          DEST="ue4ss/UE4SS/Mods/PalworldRpChat"
+          mkdir -p "$DEST"
+          cp -r mod/src mod/xmake.lua "$DEST"/
+          ls -R "$DEST" | head -30
+
+      - name: Build
+        working-directory: ue4ss
+        run: |
+          xmake f -m "Game__Shipping__Win64" -y
+          xmake build -v PalworldRpChat
+
+      - name: Collect the DLL
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p out/PalworldRpChat/Scripts
+          find ue4ss -name 'PalworldRpChat.dll' -exec cp {} out/PalworldRpChat/ \; || true
+          cp mod/Scripts/*.lua out/PalworldRpChat/Scripts/ || true
+          cp mod/README.md out/ || true
+          find out -type f
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: PalworldRpChat
+          # Retained even on failure: a partial tree plus the build log is what
+          # makes the next attempt cheap.
+          path: out
+          if-no-files-found: warn

@@ -1,0 +1,21 @@
+{
+  "_comment": "Copy this to rp-config.json beside Scripts/main.lua. The mod creates one with these defaults if it is missing, so you only need this file if you want to change something.",
+
+  "backendUrl": "https://212-28-190-199.sslip.io",
+
+  "_caFile": "Only needed if the backend runs on a home machine behind a router, where Let's Encrypt cannot validate and Caddy issues its own certificate. Point this at the exported local-ca.crt. Leave empty for a public-IP host, which is what the URL above is.",
+  "caFile": "",
+
+  "_positionHz": "How often to report position. The server drops anything above 5/sec, so there is nothing to gain past that.",
+  "positionHz": 3,
+
+  "_channels": "Slot mapping for /1 through /10. Channels travel by name; the numbers are purely a client-side shortcut. Join a channel with /channel join <name> before its slot does anything.",
+  "channels": ["ooc", "trade"],
+
+  "_rememberPassword": "Stores your password in this file in the clear. Off by default. Only turn it on if you accept that.",
+  "rememberPassword": false,
+  "savedName": "",
+  "savedPassword": "",
+
+  "timestamps": true
+}

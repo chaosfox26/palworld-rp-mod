@@ -1,0 +1,30 @@
+# Build output
+build/
+.xmake/
+out/
+*.dll
+*.exp
+*.lib
+*.pdb
+*.obj
+*.ilk
+
+# Test binaries
+tests/test_protocol
+tests/test_protocol.exe
+tests/test_envelope
+tests/test_envelope.exe
+tests/test_crypto_win.exe
+tests/*.txt
+
+# Runtime config, which holds the backend URL and possibly a saved password
+rp-config.json
+
+# The key is committed as a placeholder. If you replace it with a real one and
+# this repo is public, uncomment the next line FIRST — and rotate the key,
+# because git remembers.
+# src/key.h
+
+.vs/
+.vscode/
+.idea/
