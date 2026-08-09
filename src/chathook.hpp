@@ -45,4 +45,16 @@ namespace rp::chathook
     // source of truth for what is a command. Until this is non-empty the hook
     // claims NOTHING: fail-open, so the native chat always works.
     void setCommands(const std::string& csvLowercase);
+
+    // Step 3: append one line to the game's own chat list by calling
+    // WBP_Ingame_Chat's AddChatMessage on the live widget instance.
+    //
+    // Purely client-side: the PalChatMessage struct goes straight into the
+    // local widget and never touches Palworld's network path. GAME THREAD
+    // ONLY — call it from the Lua tick, which already runs there.
+    //
+    // Returns false (logging the reason once, not per message) when the
+    // widget is not on screen or the game update changed the shapes; callers
+    // fall back to the RP window, which shows every line regardless.
+    bool inject(const std::string& senderUtf8, const std::string& messageUtf8, int category);
 }

@@ -37,6 +37,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <new>
 #include <set>
 #include <vector>
 
@@ -47,6 +48,7 @@
 #include <Unreal/FString.hpp>
 #include <Unreal/UObject.hpp>
 #include <Unreal/UObjectGlobals.hpp>
+#include <Unreal/UnrealFlags.hpp>
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h> // WideCharToMultiByte
@@ -234,6 +236,135 @@ namespace rp::chathook
     bool installed()
     {
         return g_installed.load();
+    }
+
+    // ------------------------------------------------------------- injection
+
+    namespace
+    {
+        // Resolved once and kept: UFunction and property layout survive for the
+        // lifetime of the loaded class. The widget INSTANCE is looked up per
+        // call — it is destroyed and recreated across level transitions.
+        UFunction* g_addFn = nullptr;
+        FStructProperty* g_addParam = nullptr; // the single PalChatMessage param
+        FProperty* g_fldSender = nullptr;
+        FProperty* g_fldMessage = nullptr;
+        FProperty* g_fldCategory = nullptr;
+        bool g_injectShapeChecked = false;
+        bool g_injectWarned = false;
+
+        void warnOnce(const std::string& line)
+        {
+            if (!g_injectWarned) log(line);
+            g_injectWarned = true;
+        }
+
+        StringType widen(const std::string& utf8)
+        {
+            if (utf8.empty()) return {};
+            const int len = ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), nullptr, 0);
+            StringType out(static_cast<size_t>(len), L'\0');
+            ::MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), out.data(), len);
+            return out;
+        }
+
+        // The live widget: same class name as the CDO and the widget-tree
+        // template, so ban the default/archetype flags and require the
+        // transient package (where instantiated UI lives).
+        UObject* findLiveChatWidget()
+        {
+            std::vector<UObject*> found;
+            UObjectGlobals::FindObjects(FName(STR("WBP_Ingame_Chat_C")),
+                                        FName(0u, 0u),
+                                        found,
+                                        0,
+                                        RF_ClassDefaultObject | RF_ArchetypeObject,
+                                        true);
+            for (UObject* obj : found)
+            {
+                if (obj && obj->GetPathName().starts_with(STR("/Engine/Transient")))
+                {
+                    return obj;
+                }
+            }
+            return nullptr;
+        }
+
+        // Validate AddChatMessage(PalChatMessage) once. A Palworld update that
+        // reshapes either lands here, downgrading injection instead of crashing.
+        bool resolveInjectShape(UObject* widget)
+        {
+            if (g_injectShapeChecked) return g_addFn != nullptr;
+            g_injectShapeChecked = true;
+
+            g_addFn = widget->GetFunctionByNameInChain(STR("AddChatMessage"));
+            if (!g_addFn)
+            {
+                warnOnce("[chathook] AddChatMessage not found - native chat display off, RP window still shows everything.");
+                return false;
+            }
+
+            int paramCount = 0;
+            for (FProperty* prop : TFieldRange<FProperty>(g_addFn, EFieldIterationFlags::IncludeDeprecated))
+            {
+                if (!prop->HasAnyPropertyFlags(CPF_Parm) || prop->HasAnyPropertyFlags(CPF_ReturnParm)) continue;
+                ++paramCount;
+                g_addParam = CastField<FStructProperty>(prop);
+            }
+            if (paramCount != 1 || !g_addParam || !g_addParam->GetStruct())
+            {
+                g_addFn = nullptr;
+                warnOnce("[chathook] AddChatMessage signature changed - native chat display off.");
+                return false;
+            }
+
+            for (FProperty* field : TFieldRange<FProperty>(g_addParam->GetStruct().Get(), EFieldIterationFlags::IncludeDeprecated))
+            {
+                const std::string name = narrow(field->GetFName().ToString());
+                const std::string cls = narrow(field->GetClass().GetName());
+                if (name == "Sender" && cls == "StrProperty") g_fldSender = field;
+                else if (name == "Message" && cls == "StrProperty") g_fldMessage = field;
+                else if (name == "Category" && (cls == "EnumProperty" || cls == "ByteProperty")) g_fldCategory = field;
+            }
+            if (!g_fldSender || !g_fldMessage || !g_fldCategory)
+            {
+                g_addFn = nullptr;
+                warnOnce("[chathook] PalChatMessage layout changed - native chat display off.");
+                return false;
+            }
+            return true;
+        }
+    } // namespace
+
+    bool inject(const std::string& senderUtf8, const std::string& messageUtf8, int category)
+    {
+        try
+        {
+            UObject* widget = findLiveChatWidget();
+            if (!widget) return false; // no chat UI on screen (menu, loading) - not an error
+            if (!resolveInjectShape(widget)) return false;
+
+            // Zero-initialised parameter block. PalChatMessage's other fields
+            // (SenderPlayerUId, the arrays, MessageId) are all valid as zeros:
+            // empty TArray, NAME_None, zero guid.
+            std::vector<uint8_t> parms(static_cast<size_t>(g_addFn->GetParmsSize()), 0);
+            uint8_t* msgBase = parms.data() + g_addParam->GetOffset_Internal();
+
+            new (msgBase + g_fldSender->GetOffset_Internal()) FString(widen(senderUtf8).c_str());
+            new (msgBase + g_fldMessage->GetOffset_Internal()) FString(widen(messageUtf8).c_str());
+            *(msgBase + g_fldCategory->GetOffset_Internal()) = static_cast<uint8_t>(category);
+
+            widget->ProcessEvent(g_addFn, parms.data());
+
+            // Frees the two FStrings (engine allocator on both sides).
+            g_addParam->DestroyValue(msgBase);
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            warnOnce(std::string("[chathook] inject failed: ") + e.what() + " - native chat display off.");
+            return false;
+        }
     }
 
     void setCommands(const std::string& csvLowercase)

@@ -17,5 +17,8 @@
   "savedName": "",
   "savedPassword": "",
 
-  "timestamps": true
+  "timestamps": true,
+
+  "_nativeChat": "Show inbound RP lines in Palworld's own chat list as well as the RP window. Purely client-side; turning it off changes nothing about what is sent or received.",
+  "nativeChat": true
 }

@@ -364,7 +364,24 @@ semantics. Also useful: `SendSystemToPlayerChat(WorldContextObject, Message:
 FString, ReceiverPlayerUIds: array)` was recovered in full — a fallback
 injection route that needs no widget instance.
 
-### Step 2 status: built, never run in game
+### Step 2 status: VERIFIED IN GAME (2026-08-08, session 6)
+
+The owner's session confirmed, in one run: backend round trip (registered,
+connected as `chaosfox26`, `/s test` came back and rendered), native-box routing
+(`/party new` and `/p` reached the RP backend), plain-text pass-through
+(three native messages went to ordinary Palworld chat), and no slash text
+leaked into Palworld chat on the sender's screen. The remaining formality is
+the two-viewer check — a second account confirming a suppressed line never
+renders for *others* — worth doing once before calling suppression bulletproof.
+
+**Category observations from that session: the three native chat modes
+produced `category = 1, 2, 3`, one per mode, in the order sent.** Which mode
+maps to which number is NOT yet recorded — the owner tabbed through modes and
+the log line does not name them. Get the pairing confirmed (one question, or
+one more send naming the mode) before step 4 bakes it in. `0` is presumably a
+system/none value; unobserved.
+
+### Step 2 implementation notes
 
 `src/chathook.cpp` detours `PalPlayerState::EnterChat` by swapping the
 UFunction's native func pointer (`GetFuncPtr`/`SetFuncPtr`) — UE4SS's
@@ -388,6 +405,29 @@ Every send through the hook logs `category=N` to the RP Chat window's
 scrollback — reading those off during the backend round-trip session closes
 discovery's last gap. Keybinds: **F9** toggles the RP window (chat mod),
 **F7**/**F6** belong to the discovery mod (scan / byte logger).
+
+### Step 3 status: built, not yet run in game
+
+`rp::chathook::inject(sender, message, category)` calls the live
+`WBP_Ingame_Chat` instance's `AddChatMessage` via `ProcessEvent` with a
+zero-initialised `PalChatMessage` (zeros are valid for every field we don't
+set: empty arrays, `NAME_None`, zero guid). `Sender`/`Message` are placement-
+new'd FStrings freed afterwards by `DestroyValue`; `Category` is written as a
+raw byte. The live instance is found per call (widgets die across level
+transitions) by class name, banning CDO/archetype flags and requiring the
+`/Engine/Transient` path. Shape checks run once and log a single warning on
+mismatch — a Palworld update downgrades injection, never crashes it.
+
+Purely client-side: nothing injected touches Palworld's network path, so
+whispers are safe to mirror. Game thread only — it is called from Lua's
+`renderChat` on the tick. `config.nativeChat = false` turns it off. Injected
+lines use sender label `[RP]` and `NATIVE_CATEGORY = 1` until step 4 does the
+real mode mapping.
+
+In-game verification list for the next session: an inbound `/s` renders in
+the native chat list; a whisper renders; the line also still appears in the
+RP window; with the chat widget closed/absent nothing crashes (inject returns
+false); after a level transition it still works (fresh instance lookup).
 
 Also seen and worth knowing: `/Script/Pal.PalCheatManager:SendChatToBroadcast`
 and `/Script/Pal.PalUtility:SendSystemToPlayerChat[_Localize]` (a system-line

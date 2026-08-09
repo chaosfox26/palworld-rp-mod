@@ -121,32 +121,47 @@ end
 
 -- --------------------------------------------------------- inbound formatting
 
+-- Category byte for lines injected into the game's own chat list. Observed
+-- values from the native box are 1, 2 and 3 (step-1 discovery); which mode is
+-- which is still to be confirmed, so until step 4 does the real mode mapping,
+-- every injected line uses one category and carries an [RP] sender label.
+local NATIVE_CATEGORY = 1
+
 local function renderChat(frame)
     local kind = frame.type or "say"
     local sender = frame.sender or "?"
     local message = frame.message or ""
-    local prefix = stamp()
+    local line
 
     if kind == "say" then
-        addLine(prefix .. sender .. ' says: "' .. message .. '"')
+        line = sender .. ' says: "' .. message .. '"'
     elseif kind == "emote" then
         -- Already composed: with encryption on, the C++ side prepends the
         -- server-assigned sender name, because the server cannot read the text.
-        addLine(prefix .. message)
+        line = message
     elseif kind == "global" then
-        addLine(prefix .. "[Global] " .. sender .. ": " .. message)
+        line = "[Global] " .. sender .. ": " .. message
     elseif kind == "guild" then
-        addLine(prefix .. "[Guild] " .. sender .. ": " .. message)
+        line = "[Guild] " .. sender .. ": " .. message
     elseif kind == "party" then
-        addLine(prefix .. "[Party] " .. sender .. ": " .. message)
+        line = "[Party] " .. sender .. ": " .. message
     elseif kind == "channel" then
-        addLine(prefix .. "[" .. (frame.channel or "?") .. "] " .. sender .. ": " .. message)
+        line = "[" .. (frame.channel or "?") .. "] " .. sender .. ": " .. message
     elseif kind == "whisper_in" then
-        addLine(prefix .. sender .. " whispers: " .. message)
+        line = sender .. " whispers: " .. message
     elseif kind == "whisper_out" then
-        addLine(prefix .. "To " .. (frame.target or "?") .. ": " .. message)
+        line = "To " .. (frame.target or "?") .. ": " .. message
     else
-        addLine(prefix .. sender .. ": " .. message)
+        line = sender .. ": " .. message
+    end
+
+    addLine(stamp() .. line)
+
+    -- Step 3: mirror the line into Palworld's own chat list. Client-side only
+    -- (the struct goes straight into the local widget), so whispers are safe.
+    -- Every failure mode just leaves the RP window as the only display.
+    if config.nativeChat ~= false and type(rp_native_inject) == "function" then
+        pcall(rp_native_inject, "[RP]", line, NATIVE_CATEGORY)
     end
 
     if frame.decryptFailed then

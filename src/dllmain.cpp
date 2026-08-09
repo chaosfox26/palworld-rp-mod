@@ -425,6 +425,20 @@ namespace
             lua.set_bool(rp::chathook::installed());
             return 1;
         });
+
+        // rp_native_inject(sender, message, category) -> bool
+        //
+        // Step 3: show an inbound RP line in the game's own chat list. Called
+        // from the Lua tick, which runs on the game thread — the only thread
+        // this is allowed on. Failure just means the RP window is the only
+        // display, which is already the fallback everywhere.
+        lua.register_function("rp_native_inject", [](const LuaMadeSimple::Lua& lua) -> int {
+            const std::string sender{lua.get_string()};
+            const std::string message{lua.get_string()};
+            const auto category = lua.get_integer();
+            lua.set_bool(rp::chathook::inject(sender, message, static_cast<int>(category)));
+            return 1;
+        });
     }
 } // namespace
 
