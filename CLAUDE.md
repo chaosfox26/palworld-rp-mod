@@ -256,6 +256,59 @@ window and do not route long-form composition through the native box.
    RP scope is selected purely by slash command. Slash-only is simpler and worth
    trying first.
 
+### Step 1 findings (2026-08-08, in-game scan, Steam build)
+
+Found by `RpChatDiscovery` (a discovery-only Lua mod, F7 = filtered
+`ForEachUObject` scan + targeted reflection dump; lives in the game's
+`ue4ss\Mods\`, not in this repo). **Do not use UE4SS's full object dump
+(`DumpAllObjects`, the old F8) — it crashed the game on this machine.** The
+targeted dump replaces it.
+
+**The chat widget** — one live instance in a session:
+
+- `WBP_Ingame_Chat_C` at
+  `/Game/Pal/Blueprint/UI/UserInterface/InGame/Chat/WBP_Ingame_Chat`, nested
+  under `WBP_PalHUD_InGame_InputListener_C` → `WBP_Ingame_Chat_Wrapper` in the
+  HUD tree. Companion widgets: `WBP_Ingame_Chat_Wrapper_C`,
+  `WBP_Ingame_ChatListContent_C` (the log list), and
+  `WBP_PalChatUIControlOverlay_C` (gamepad chat overlay, has its own
+  `SendChat` + `ChangeChatCategory`).
+
+**The submit path**, outermost in:
+
+1. Input box is a `PalMultiLineEditableTextBox` inside `WBP_Ingame_Chat`; its
+   commit event is bound to `WBP_Ingame_Chat_C:OnTextCommittedInternal`
+   (see the `BndEvt__..._OnMultiLineEditableTextBoxCommittedEvent` binding).
+2. `/Script/Pal.PalPlayerState:EnterChat` — the client→server RPC carrying the
+   message. **This is the hook point for step 2**: native (survives UI
+   reskins), fires once per send, and suppressing it keeps the message off the
+   server entirely.
+3. Server side: `/Script/Pal.PalGameStateInGame:BroadcastChatMessage`, then
+   back down via `/Script/Pal.PalPlayerController:EnterChat_Receive`.
+
+**The receive/append path**: `PalPlayerController:EnterChat_Receive` →
+`PalGameStateInGame.OnRecievedChatMessageDelegate` (sic — Pocketpair's typo) →
+`/Script/Pal.PalUIChat:OnReceivedChat` / `OnFilteredChat` (word filtering via
+`PalChatFilteringWaiter`) → `WBP_Ingame_Chat_C:AddChatMessage`. **Injection
+point for step 3 is `AddChatMessage`** on the live widget instance — purely
+client-side, so an injected RP line never touches Palworld's own network path.
+
+**Mode selector**: enum `/Script/Pal.EPalChatCategory`;
+`WBP_Ingame_Chat_C:ChangeCategory` switches it. Messages travel as
+`/Script/Pal.PalChatMessage` structs.
+
+**Still pending (one more F7 run in a session gets it):** exact parameter
+lists of `EnterChat`, `EnterChat_Receive`, `BroadcastChatMessage` and
+`AddChatMessage`; `EPalChatCategory`'s values; `PalChatMessage`'s fields. The
+upgraded discovery mod dumps all of these on F7 — the earlier run predates the
+upgrade.
+
+Also seen and worth knowing: `/Script/Pal.PalCheatManager:SendChatToBroadcast`
+and `/Script/Pal.PalUtility:SendSystemToPlayerChat[_Localize]` (a system-line
+injection route that may be an alternative to `AddChatMessage` if widget-level
+injection misbehaves), and `Engine.GameMode:Say` (stock UE, probably unused by
+Palworld).
+
 ### Warnings
 
 - **Suppression is the risky part.** If the original call is not properly blocked,
