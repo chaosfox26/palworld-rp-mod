@@ -222,6 +222,52 @@ mod name as the main dll name for C++ mods", so `PalworldRpChat.dll` may not nee
 renaming to `main.dll` on current builds. Verify against the shipped version
 rather than assuming either way.
 
+## Next feature: hook Palworld's own chat box
+
+The owner wants to type in the game's native chat bar (the one with `[Global]`,
+"Type here...", Tab to change mode) and see RP messages appear in the game's chat
+log — not only in the ImGui tab.
+
+**This is a hybrid, not a replacement.** The native box has a small character cap;
+that cap is the entire reason the ImGui window exists. Do not remove the ImGui
+window and do not route long-form composition through the native box.
+
+| Surface | Job |
+|---|---|
+| Native chat bar | short lines, quick `/s` `/em` `/w`, and **receiving everything** |
+| ImGui window | long-form composition up to the byte cap, profiles, `/who`, config |
+
+### The work, in order
+
+1. **Discovery, in the running game.** Nothing here can be looked up — it has to be
+   found. Use UE4SS Live View and object dumps to locate:
+   - the widget class behind that chat bar,
+   - the UFunction that fires on submit (the one receiving the typed FString),
+   - the UFunction that appends a line to the chat log,
+   - how the `[Global]` / Tab mode selector is represented.
+   Record the exact names found in this file — they are the whole asset here.
+2. **Hook submit.** `RegisterHook` on the submit function. Read the text. If it is
+   ours (a slash command we own, or an RP mode), route it to `rp_send` and
+   **suppress the original call** so it does not also go to Palworld's own chat.
+   If it is not ours, let it through untouched.
+3. **Inject inbound.** On `chat_receive`, call the game's append-to-log function so
+   RP lines appear in the native list. Keep writing them to the ImGui log too.
+4. **Mode mapping.** Decide how Palworld's chat modes map to ours, or whether the
+   RP scope is selected purely by slash command. Slash-only is simpler and worth
+   trying first.
+
+### Warnings
+
+- **Suppression is the risky part.** If the original call is not properly blocked,
+  every RP line is also broadcast to the real game chat — visible to players
+  without the mod, and outside the encrypted path. Verify this explicitly.
+- **This is the most patch-fragile code in the project.** Function names and
+  signatures move when Palworld updates. Isolate it in its own file with a clear
+  failure mode: if the hook cannot be installed, log it once and fall back to the
+  ImGui window rather than crashing or silently swallowing input.
+- **The cap still applies.** A message typed in the native box is limited by that
+  box. Do not try to defeat that; that is what the other window is for.
+
 ## Backend contract — targeting v2.6.1
 
 `API.md`, `src/chat.js`, `src/rest.js` and `src/envelope.js` in the backend repo
@@ -300,21 +346,29 @@ lower of the two limits and everything sizes against that. Do not bypass it.
 across all three padding remainders, including a plaintext exactly at the 99,984
 cap. Both host test binaries build clean under `-Wall -Wextra -Werror`.
 
-**Never compiled or run.** Nothing has been built on Windows or run against the
-live backend. `src/crypto.hpp`, `src/net.cpp` and `src/dllmain.cpp` have never
-seen MSVC. The Lua scripts have never executed — no Lua interpreter was available
-where they were written.
+**Compiles and links.** `PalworldRpChat.dll` builds clean against RE-UE4SS
+3.0.1.0.0 (`1c1a149`) with MSVC 19.44 — PE32+ x64, exporting `start_mod` and
+`uninstall_mod`, with no non-system dependency beyond `UE4SS.dll` and the VC
+redist. `src/crypto.hpp` is additionally proven against Node in both directions
+by `windows-crypto`.
+
+**Never run.** Nothing has been loaded into Palworld or pointed at the live
+backend. The Lua scripts still have never executed — no Lua interpreter was
+available where they were written.
 
 **Highest-risk spots, in order:**
 
-1. `src/dllmain.cpp` — `on_lua_start`'s signature and `LuaMadeSimple`'s
-   `get_*`/`set_*` argument helpers have both changed across UE4SS releases. If
-   the mod fails to load, start here.
-2. `CMakeLists.txt` — built against UE4SS's own `UE4SS` CMake target per
-   `docs/guides/creating-a-c++-mod.md`, not yet confirmed green in CI.
-3. `Scripts/json.lua` — unexecuted. Give it a pass before trusting it.
-4. `Scripts/main.lua` — the pawn position path (`UEHelpers.GetPlayerController()`,
+1. `Scripts/main.lua` — the pawn position path (`UEHelpers.GetPlayerController()`,
    `pawn:K2_GetActorLocation()`) needs checking against Palworld specifically.
+2. `Scripts/json.lua` — unexecuted. Give it a pass before trusting it.
+3. `src/dllmain.cpp` — it compiles, but compiling is not loading. `on_lua_start`'s
+   signature is still only checked against 3.0.1. If the mod fails to load rather
+   than fails to build, start here.
+
+Resolved, do not re-litigate: `LuaMadeSimple::get_string()` returns
+`std::string_view` on 3.0.1 and the returned view is **unowned** — the
+implementation calls `lua_remove()` before returning it. Every binding copies
+into a `std::string` at the boundary. Do not "simplify" those copies away.
 
 ## Testing
 
@@ -335,6 +389,76 @@ node envelope_interop.js emit | test_crypto_win.exe | node envelope_interop.js v
 rather than importing it. A diff between the two copies is the signal that the
 contract moved — keep it that way.
 
+## Building the DLL locally
+
+CI is the reproducible build; this is for iteration, because a red CI cycle
+costs 30 minutes and a local rebuild of just our two translation units costs
+seconds. The tree lives **outside** this repo so it is never at risk of being
+committed:
+
+```
+D:\Claude\Test\ue4ss-build\
+├── ue4ss\          RE-UE4SS checkout (Epic-derived headers — never commit or upload)
+├── mod\            directory junction -> this repo, so edits here are picked up
+├── CMakeLists.txt  the same 4-line top-level project CI generates
+├── vcpkg.json      the same manifest, same builtin-baseline
+└── build.ps1       .\build.ps1 [-Configure] [-Clean]
+```
+
+`build.ps1` imports `vcvars64.bat` itself rather than trusting the shell. This
+matters: the **Developer PowerShell for VS 2022 shortcut defaults to x86**, and a
+32-bit DLL will not load into Palworld. The script hard-fails if the target
+architecture is not x64.
+
+Prerequisites beyond VS 2022 Build Tools, both installed once:
+
+- **Rust** (`rustup`, stable, `x86_64-pc-windows-msvc`). UE4SS's `patternsleuth`
+  dependency is Rust, driven through `corrosion`. GitHub's runners ship it
+  preinstalled, which is why CI never needed a step for it.
+- **A full vcpkg clone** at `D:\Claude\Test\vcpkg`. The vcpkg bundled with VS is
+  the *tool only* — no port registry, no `versions/` — so it cannot resolve the
+  manifest's `builtin-baseline` and is useless here.
+
+Submodule auth is not a problem locally: the owner's `gh` login already has Epic
+source access. The submodule URLs are SSH (`git@github.com:`), so rewrite them to
+HTTPS for the credential helper. Do this **without touching global git config**:
+
+```powershell
+$env:GIT_CONFIG_COUNT=1
+$env:GIT_CONFIG_KEY_0='url.https://github.com/.insteadOf'
+$env:GIT_CONFIG_VALUE_0='git@github.com:'
+git -C ...\ue4ss submodule update --init --recursive --depth 1
+```
+
+**Switching the vcpkg triplet needs the stale cache cleared.** `find_package`
+results are cached by absolute path, so after changing `VCPKG_TARGET_TRIPLET` a
+plain reconfigure still points at the deleted tree and ninja fails with
+`'vcpkg_installed/x64-windows/lib/z.lib' ... missing and no known rule to make
+it`. Clear the offending entries rather than wiping `build/`, which would cost a
+full 30-minute UE4SS rebuild:
+
+```powershell
+cmake -B build -S . -U ZLIB_INCLUDE_DIR -U ZLIB_LIBRARY_DEBUG -U ZLIB_LIBRARY_RELEASE -U FIND_PACKAGE_MESSAGE_DETAILS_ZLIB
+```
+
+Note the `-S`: without it `cmake -B build` infers the wrong source directory and
+fails with a "does not match the source used to generate cache" error instead of
+clearing anything.
+
+## Installing a build into the game
+
+UE4SS 3.0.1 resolves a C++ mod's DLL as `dlls/main.dll` **first**, then falls
+back to `dlls/<ModName>.dll` (`UE4SS/src/Mod/CppMod.cpp`). So the rename to
+`main.dll` is genuinely unnecessary as long as the folder name matches — this is
+UE4SS #1313, now confirmed against the shipped version rather than assumed.
+
+```
+Pal\Binaries\Win64\ue4ss\Mods\PalworldRpChat\
+├── dlls\PalworldRpChat.dll
+├── Scripts\main.lua, json.lua
+└── enabled.txt          (empty file; or add the name to Mods\mods.txt)
+```
+
 ## CI
 
 `.github/workflows/build.yml`, three jobs split by how likely they are to work:
@@ -342,13 +466,16 @@ contract moved — keep it that way.
 | Job | Needs | Expected |
 |---|---|---|
 | `host-tests` | g++, node | green |
-| `windows-crypto` | MSVC, node — **no UE4SS** | green after the first fixes |
-| `windows-dll` | MSVC, CMake, vcpkg, UE4SS source, `EPIC_SUBMODULE_TOKEN` | fails first; `continue-on-error: true` |
+| `windows-crypto` | MSVC, node — **no UE4SS** | green |
+| `windows-dll` | MSVC, CMake, vcpkg, UE4SS source, `EPIC_SUBMODULE_TOKEN` | green since run 31290676388; now blocking |
 
 The split is deliberate: a UE4SS path detail must not block verification of the
 crypto and protocol work. `windows-dll` builds against a full `RE-UE4SS` source
-checkout via CMake — read the failing step's log before changing `CMakeLists.txt`
-or the workflow, and flip `continue-on-error` to `false` once it goes green.
+checkout via CMake. All three jobs are green and `continue-on-error` is off —
+a red `windows-dll` is a real regression now (or an expired
+`EPIC_SUBMODULE_TOKEN`, which fails at the clone step; that is a token renewal,
+not a code problem). A from-scratch run takes ~30 minutes; the caching section
+above is the fix if iteration moves back to CI.
 
 ## Before the mod can run
 

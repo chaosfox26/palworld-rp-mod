@@ -76,9 +76,9 @@ jobs:
     # xmake is retired for this job — see "The UE4SS build: use CMake, not
     # xmake" in CLAUDE.md. CMake >= 3.22 is UE4SS's own documented default,
     # confirmed against docs/guides/creating-a-c++-mod.md and RE-UE4SS's own
-    # cmake_build_ue4ss.yml. Still marked continue-on-error until a run has
-    # actually gone green with this pipeline — flip it once it has.
-    continue-on-error: true
+    # cmake_build_ue4ss.yml. Went green on run 31290676388 (2026-08-08,
+    # commit 60163db), so a failure here is now a real regression and blocks.
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
         with:
