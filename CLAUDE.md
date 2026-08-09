@@ -272,15 +272,32 @@ crashed game. The safe tools are: the plain `ForEachUObject` name scan
 the remaining gaps are being closed. UE4SS's C++ Header Dumper (a different
 code path from `DumpAllObjects`) is the untried fallback if those fail.
 
-**A third crash refined the call-time rule: hooks install fine and fire fine,
-but calling `:get()` on `EnterChat`'s FText parameter from a Lua hook faults
-— and pcall cannot catch a native access violation, so "defensive" Lua is not
-a defence.** Hook callbacks must be position-aware and touch only parameters
-known to be POD (the Category enum/byte). Message text has not been readable
-from Lua so far; FString params are untested-by-choice. **Design consequence
-for step 2:** the production hook needs the message text, so plan it in C++
-(`RegisterHook` on the C++ side, where FText is handled as a real type), not
-in Lua — or prove FString reads safe first via `EnterChat_Receive`.
+**The real culprit, from run 4's crash dump — and it is not what the previous
+revision of this section said.** Top frames: `UEnum::ForEachName` (Class.hpp:602)
+under `LuaType::push_enumproperty` (LuaUObject.cpp:1515), reading address `0x1`.
+**`EPalChatCategory`'s UEnum name table is not walkable by this UE4SS build.**
+An `EnumProperty` faults *while being marshalled into Lua* — having it in a
+hooked function's parameter list is enough; no callback code needs to touch it,
+and pcall cannot catch the AV. This one fault explains all three reflection/hook
+crashes: the targeted dump died exactly at `EPalChatCategory` (its partial
+output stops right before it), and both `EnterChat` hook crashes were the
+`Category: EnumProperty` param being pushed. FText was never proven guilty —
+earlier suspicion of it is retracted; it is merely untested.
+
+The rules, corrected:
+
+- **Never hook `EnterChat` from Lua** — its `Category` is an `EnumProperty`.
+- **Never let any `EPalChatCategory` value cross the Lua boundary** in either
+  direction (param, `:get()`, struct field, dump).
+- `EnterChat_Receive` carries `Category` as a plain **ByteProperty**, which
+  skips `push_enumproperty` entirely — that is the one Lua-reachable source of
+  the category numbers, currently being tested. Note it is the client→server
+  RPC: it fires on the hosting machine (fine in self-hosted co-op, never on a
+  client of a dedicated server).
+- If even the byte hook faults, Lua discovery is finished: the categories come
+  from a C++ hook, where `EPalChatCategory` is just an integer and none of
+  this marshalling exists. **Step 2's production hook belongs in C++
+  regardless** — it needs the message text and must not marshal the enum.
 
 **The chat widget** — one live instance in a session:
 
