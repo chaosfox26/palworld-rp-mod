@@ -258,11 +258,19 @@ window and do not route long-form composition through the native box.
 
 ### Step 1 findings (2026-08-08, in-game scan, Steam build)
 
-Found by `RpChatDiscovery` (a discovery-only Lua mod, F7 = filtered
-`ForEachUObject` scan + targeted reflection dump; lives in the game's
-`ue4ss\Mods\`, not in this repo). **Do not use UE4SS's full object dump
-(`DumpAllObjects`, the old F8) — it crashed the game on this machine.** The
-targeted dump replaces it.
+Found by `RpChatDiscovery` (a discovery-only Lua mod in the game's
+`ue4ss\Mods\`, not in this repo).
+
+**Bulk reflection dumping is unavailable in this game — do not retry it.**
+Two separate crashes: `DumpAllObjects` (UE4SS's full dump), and a targeted
+`ForEachProperty`/`ForEachName` walk over ~10 named objects. The targeted one
+got most of the way through before dying (its partial output is where the
+signatures below come from), but "most of the way" in a discovery tool means a
+crashed game. The safe tools are: the plain `ForEachUObject` name scan
+(`GetFullName` only — ran clean three times over ~250k objects), and
+**call-time parameter logging** via pass-through `RegisterHook`, which is how
+the remaining gaps are being closed. UE4SS's C++ Header Dumper (a different
+code path from `DumpAllObjects`) is the untried fallback if those fail.
 
 **The chat widget** — one live instance in a session:
 
@@ -274,34 +282,54 @@ targeted dump replaces it.
   `WBP_PalChatUIControlOverlay_C` (gamepad chat overlay, has its own
   `SendChat` + `ChangeChatCategory`).
 
-**The submit path**, outermost in:
+**The submit path**, with recovered signatures (function flags in brackets):
 
 1. Input box is a `PalMultiLineEditableTextBox` inside `WBP_Ingame_Chat`; its
    commit event is bound to `WBP_Ingame_Chat_C:OnTextCommittedInternal`
    (see the `BndEvt__..._OnMultiLineEditableTextBoxCommittedEvent` binding).
-2. `/Script/Pal.PalPlayerState:EnterChat` — the client→server RPC carrying the
-   message. **This is the hook point for step 2**: native (survives UI
-   reskins), fires once per send, and suppressing it keeps the message off the
-   server entirely.
-3. Server side: `/Script/Pal.PalGameStateInGame:BroadcastChatMessage`, then
-   back down via `/Script/Pal.PalPlayerController:EnterChat_Receive`.
+2. `PalPlayerState:EnterChat(Msg: FText, Category: EPalChatCategory) -> bool`
+   [0x04020401 — BlueprintCallable, Native, Public, Final; **not** a net
+   function]. Runs locally on the sending client. **This is the step-2 hook
+   point**: suppressing it keeps the message off the wire entirely, and its
+   bool return may already mean "accepted" (verify at call time).
+3. `PalPlayerController:EnterChat_Receive(Message: FString, Category: byte)`
+   [0x00220CC0 — NetServer, reliable]. Despite the name, the flags say this is
+   the client→server RPC ("receive" is written from the server's point of
+   view). On a dedicated server it never runs on a client.
+4. `PalGameStateInGame:BroadcastChatMessage(ChatMessage: PalChatMessage)`
+   [0x00024CC0 — NetMulticast, reliable] — server → every client.
 
-**The receive/append path**: `PalPlayerController:EnterChat_Receive` →
+**The receive/append path**: `BroadcastChatMessage` multicast →
 `PalGameStateInGame.OnRecievedChatMessageDelegate` (sic — Pocketpair's typo) →
-`/Script/Pal.PalUIChat:OnReceivedChat` / `OnFilteredChat` (word filtering via
-`PalChatFilteringWaiter`) → `WBP_Ingame_Chat_C:AddChatMessage`. **Injection
-point for step 3 is `AddChatMessage`** on the live widget instance — purely
-client-side, so an injected RP line never touches Palworld's own network path.
+`PalUIChat:OnReceivedChat(Message: PalChatMessage)` / `OnFilteredChat(Waiter,
+Message)` (word filtering via `PalChatFilteringWaiter`) →
+`WBP_Ingame_Chat_C:AddChatMessage`. **Injection point for step 3 is
+`AddChatMessage`** on the live widget instance — purely client-side, so an
+injected RP line never touches Palworld's own network path.
+
+**The message struct**, `/Script/Pal.PalChatMessage`:
+
+```
+Category            EnumProperty    (EPalChatCategory)
+Sender              StrProperty
+SenderPlayerUId     StructProperty  (FGuid-shaped; verify at call time)
+Message             StrProperty
+ReceiverPlayerUIds  ArrayProperty
+MessageId           NameProperty
+MessageArgKeys      ArrayProperty
+MessageArgValues    ArrayProperty
+```
 
 **Mode selector**: enum `/Script/Pal.EPalChatCategory`;
-`WBP_Ingame_Chat_C:ChangeCategory` switches it. Messages travel as
-`/Script/Pal.PalChatMessage` structs.
+`WBP_Ingame_Chat_C:ChangeCategory` switches it.
 
-**Still pending (one more F7 run in a session gets it):** exact parameter
-lists of `EnterChat`, `EnterChat_Receive`, `BroadcastChatMessage` and
-`AddChatMessage`; `EPalChatCategory`'s values; `PalChatMessage`'s fields. The
-upgraded discovery mod dumps all of these on F7 — the earlier run predates the
-upgrade.
+**Still pending, via F9 call-time logging (never via dumping):**
+`EPalChatCategory`'s numeric values (send once per chat mode and read the
+logged `Category`), `AddChatMessage`'s exact parameters (almost certainly the
+`PalChatMessage` struct), and `EnterChat`'s return-value semantics. Also
+useful: `SendSystemToPlayerChat(WorldContextObject, Message: FString,
+ReceiverPlayerUIds: array)` was recovered in full — a fallback injection route
+that needs no widget instance.
 
 Also seen and worth knowing: `/Script/Pal.PalCheatManager:SendChatToBroadcast`
 and `/Script/Pal.PalUtility:SendSystemToPlayerChat[_Localize]` (a system-line
