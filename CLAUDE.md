@@ -180,6 +180,30 @@ through it.
   symbols a C module would need, and a replacement for the in-game ImGui window.
   Keep it as the fallback only if the Epic route somehow fails.
 
+## Cache the build — 30 minutes a cycle is the real bottleneck now
+
+The CMake pipeline works, but a from-scratch run is 30+ minutes because nothing is
+cached and runners are ephemeral. At three or four more iterations that is hours of
+waiting, and it is the single biggest thing slowing Part 4 down. Fix it before
+grinding through more compile errors.
+
+Three caches, in order of payoff:
+
+1. **vcpkg binary cache** — biggest win by far. `ixwebsocket` and `nlohmann-json`
+   are rebuilt from source every run. Set `VCPKG_BINARY_SOURCES=clear;files,<dir>,readwrite`
+   and `actions/cache` that directory, keyed on the hash of `vcpkg.json` plus the
+   `builtin-baseline`. Should turn minutes of dependency building into a download.
+2. **The RE-UE4SS checkout.** `--depth 1 --recursive --shallow-submodules` is still
+   a large clone every run. Cache it keyed on the resolved commit SHA. Careful:
+   **the cache must not contain Epic's headers if it could ever be read by anything
+   outside this private repo.** Actions caches are scoped to the repo, so this is
+   acceptable here — but do not move to a shared or public cache.
+3. **`ccache` or `sccache`** for UE4SS's core objects, which dominate compile time
+   and never change between our iterations.
+
+If (1) and (2) alone get a cycle under ten minutes, stop there. This is a means to
+an end, not a project.
+
 ## Two C++ API details that came out of the same changelog
 
 Both are already fixed in `src/dllmain.cpp`; do not undo them.

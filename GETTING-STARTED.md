@@ -12,11 +12,13 @@ Tick these off as you go. It is fine to stop anywhere and come back.
 - [x] **Part 2** — key and backend URL collected *(done: key verified and already written into `src/key.h`)*
 - [x] **Part 3** — repo pushed to GitHub, CI running *(done: run #1, `host-tests` and `windows-crypto` both green first try)*
 - [x] **Part 4a** — Epic Games account linked, CI token added *(done: `EPIC_SUBMODULE_TOKEN` secret in place)*
+- [ ] **Part 4b** — local compiler set up (optional, makes Part 4 much faster)
+- [ ] **Part 4c** — local build working (much faster than CI)
 - [ ] **Part 4** — builds going green *(only `windows-dll` left)*
 - [ ] **Part 5** — mod installed into Palworld
 - [ ] **Part 6** — first run in game
 
-**You are in Part 4: Claude Code is wiring the token into `windows-dll` and switching to CMake.**
+**You are at Part 4c: building locally now that Build Tools 2022 is installed.**
 
 ---
 
@@ -306,6 +308,131 @@ and update the secret.
 
 ---
 
+## Part 4b — Building on your own PC (optional, but faster)
+
+Waiting 30 minutes per attempt is the slow part now. A compiler on your own machine
+turns that into seconds. You still never type a compiler command — Claude Code does
+that — this just stops the waiting.
+
+You already have **Visual Studio Build Tools 2019 (16.11.58)**, which may well be
+enough: UE4SS's README says it needs MSVC with C++20 support including
+`std::format`, and that "Visual Studio 2019 (recent versions) and Visual Studio
+2022 will work". 16.11 is the last and most complete 2019 release, and
+`std::format` arrived in 16.10.
+
+So: **check what you have before downloading anything.**
+
+### 4b.1 — What those words mean
+
+The Visual Studio Installer thinks in two layers:
+
+- A **workload** is a bundle for a kind of work — "C++ build tools" is the one that
+  contains a C++ compiler. Ticking a workload pulls in sensible defaults.
+- **Individual components** are the pieces inside. Occasionally you need one the
+  workload does not include by default.
+
+"Build Tools" installed on its own does **not** guarantee a C++ compiler is present.
+It is a shell that can hold many things. So the first job is looking inside.
+
+### 4b.2 — Look inside
+
+1. In the Visual Studio Installer, click **Modify** next to Build Tools 2019.
+2. On the **Workloads** tab, find **C++ build tools**. If it is not ticked, tick it.
+3. Switch to the **Individual components** tab and confirm these are ticked:
+   - **MSVC v142 - VS 2019 C++ x64/x86 build tools (Latest)** — the compiler itself
+   - **Windows 10 SDK** or **Windows 11 SDK**, any version — Windows' own headers,
+     which is where `bcrypt.h` for the encryption comes from
+   - **C++ CMake tools for Windows** — CMake and Ninja, the tools that drive the
+     build
+4. Bottom right shows a download size. Click **Modify** to apply.
+
+If everything was already ticked, close it — nothing to do.
+
+### 4b.3 — Hand it to Claude Code
+
+> Set up a local Windows build so we stop waiting 30 minutes per attempt. I have
+> Visual Studio Build Tools 2019 16.11.58 with the C++ workload, Windows SDK, and
+> C++ CMake tools. UE4SS's README says 2019 recent versions are supported, so try
+> that first — do NOT install VS 2022 unless the build actually fails on a C++
+> standard or compiler-version error, and tell me before downloading anything that
+> large. Clone UE4SS locally using my Epic access, and get PalworldRpChat.dll
+> building on this machine. Keep the CI workflow as-is. Skip the CI caching work
+> for now.
+
+### 4b.4 — If 2019 turns out to be too old
+
+You will know because the error mentions a C++ standard (`c++23`, `cxx_std_23`) or
+an unsupported compiler version. Then, and only then:
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools
+```
+
+Then reopen the installer, **Modify** the 2022 entry, and tick the same three
+components as in 4b.2 — the 2022 equivalents are named **MSVC v143** and
+**Windows 11 SDK**.
+
+Roughly 7–10 GB. If your `C:` drive is tight, tell Claude Code to install it to
+`D:` instead. Having both 2019 and 2022 side by side is fine and normal; they do
+not conflict.
+
+---
+
+## Part 4c — Build on your own machine (much faster)
+
+Build Tools 2022 is installed, so the cloud is no longer the only option — and your
+PC is far quicker than GitHub's free runner (4 cores, 16 GB) at 16 cores and 64 GB.
+More importantly, your machine keeps the previous build, so after the first one only
+the file that changed gets recompiled. Seconds instead of half an hour.
+
+### What you do
+
+Open PowerShell:
+
+```powershell
+cd D:\Claude\Test\palworld-rp-mod
+claude
+```
+
+Paste this:
+
+> Visual Studio Build Tools 2022 (17.14) with the C++ workload is now installed on
+> this machine. An older 2019 is also present — ignore it and use 2022.
+>
+> Set up a local build so we stop waiting on CI:
+> 1. Clone RE-UE4SS somewhere outside this repo folder. My git is already
+>    authenticated and this account has Epic source access, so the submodule should
+>    clone normally — no PAT needed locally.
+> 2. Reproduce the CMake + vcpkg setup from `.github/workflows/build.yml` locally.
+> 3. Build `PalworldRpChat.dll` with the 2022 toolchain, and fix compile errors by
+>    iterating locally instead of pushing to CI each time.
+> 4. When it builds clean, push the fixes so CI matches, and tell me where the DLL is.
+>
+> Keep the CI workflow working — local is for iteration, CI stays the reproducible
+> build other people can trust.
+
+### What to expect
+
+- It will ask permission for a lot of commands. Saying yes is fine; you can read
+  each one first.
+- The **first** build downloads UE4SS and its dependencies — a gigabyte or two, and
+  maybe five to ten minutes of compiling. Later builds are seconds.
+- **Done looks like:** a file called `PalworldRpChat.dll` exists, and Claude Code
+  tells you where.
+
+### Optional: make it faster still
+
+Windows Defender scans every file a build creates, and a C++ build creates
+thousands. Excluding just the build folder typically wins 20–40%.
+
+Settings → Privacy & security → Windows Security → Virus & threat protection →
+Manage settings → Exclusions → Add → Folder.
+
+It is a security tradeoff scoped to one folder you control. Your call, and entirely
+optional.
+
+---
+
 ## Part 4 — The build loop
 
 This is where most of the time goes. The pattern is always the same: Claude Code
@@ -320,8 +447,14 @@ Paste this:
 > the run, read the result, repeat. Tell me when `windows-crypto` is green, and
 > tell me if you get stuck on the same error twice.
 
-Each cycle takes roughly 3–5 minutes of waiting. Claude Code can read the logs
-directly, so you do not need to copy anything from the website.
+**Timing, corrected:** the first runs took about a minute, but that was before the
+build actually got as far as compiling. A real from-scratch build is **30+ minutes**
+because nothing is cached yet and each cloud machine starts empty. Claude Code has
+been told to add caching, which should bring it under ten.
+
+This means the loop is slow but hands-off. Claude Code reads the logs itself, so
+there is nothing to copy from the website — go and do something else, and check
+back.
 
 When `windows-crypto` goes green, that is a real milestone: the encryption is
 proven to work and to interoperate with what your server expects.
