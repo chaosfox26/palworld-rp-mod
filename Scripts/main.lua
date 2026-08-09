@@ -706,7 +706,23 @@ else
     print("[RP] No timer function available; position and chat will not update.\n")
 end
 
-notice("RP chat ready. F9 toggles the window, /help lists commands.")
+-- Tell the native chat-box hook which slash tokens are ours. This list is the
+-- keys of `commands` plus the numeric channel slots — main.lua remains the
+-- single source of truth for what counts as a command. Anything not listed
+-- here passes through the native box to ordinary Palworld chat untouched.
+if type(rp_hook_set_commands) == "function" then
+    local names = {}
+    for name in pairs(commands) do names[#names + 1] = name end
+    for slot = 1, 10 do names[#names + 1] = tostring(slot) end
+    rp_hook_set_commands(table.concat(names, ","))
+end
+
+if type(rp_hook_status) == "function" and rp_hook_status() then
+    notice("RP chat ready. Native chat box hooked: recognised /commands route to RP; everything else stays Palworld chat.")
+else
+    notice("RP chat ready (native chat hook inactive; use this window).")
+end
+notice("F9 toggles the window, /help lists commands.")
 
 M.dispatch = dispatch
 M.model = model

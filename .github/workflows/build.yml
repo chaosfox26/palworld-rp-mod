@@ -11,10 +11,19 @@ name: build
 # The split matters: if windows-dll fails on a UE4SS path detail, the crypto and
 # protocol work is still verified rather than being blocked behind it.
 
+# Docs-only changes don't need a 30-minute windows-dll build. Anything that
+# could affect a build or test still triggers: source, Scripts/, tests/, this
+# workflow, vcpkg/CMake files.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
 
 jobs:

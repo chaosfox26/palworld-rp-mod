@@ -16,6 +16,7 @@
 set(TARGET PalworldRpChat)
 
 add_library(${TARGET} SHARED
+    src/chathook.cpp
     src/dllmain.cpp
     src/net.cpp
 )

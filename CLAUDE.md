@@ -350,13 +350,44 @@ MessageArgValues    ArrayProperty
 **Mode selector**: enum `/Script/Pal.EPalChatCategory`;
 `WBP_Ingame_Chat_C:ChangeCategory` switches it.
 
-**Still pending, via F9 call-time logging (never via dumping):**
-`EPalChatCategory`'s numeric values (send once per chat mode and read the
-logged `Category`), `AddChatMessage`'s exact parameters (almost certainly the
-`PalChatMessage` struct), and `EnterChat`'s return-value semantics. Also
-useful: `SendSystemToPlayerChat(WorldContextObject, Message: FString,
-ReceiverPlayerUIds: array)` was recovered in full — a fallback injection route
-that needs no widget instance.
+**The Lua byte-hook test (2026-08-08, session 5): crash-safe but no data.**
+The `EnterChat_Receive` byte logger installed cleanly and the session ran Say,
+Global and Guild sends with zero crashes — but the hook never fired and no
+values were logged. Explanation: it is the client→server RPC, so it executes
+on the hosting machine, and the session was evidently not self-hosted. Treat
+"hook a NetServer RPC client-side" as dead on non-hosted sessions.
+
+**Still pending:** `EPalChatCategory`'s numeric values — now logged by the C++
+`chathook` (below) on every send, `AddChatMessage`'s exact parameters (almost
+certainly the `PalChatMessage` struct), and `EnterChat`'s return-value
+semantics. Also useful: `SendSystemToPlayerChat(WorldContextObject, Message:
+FString, ReceiverPlayerUIds: array)` was recovered in full — a fallback
+injection route that needs no widget instance.
+
+### Step 2 status: built, never run in game
+
+`src/chathook.cpp` detours `PalPlayerState::EnterChat` by swapping the
+UFunction's native func pointer (`GetFuncPtr`/`SetFuncPtr`) — UE4SS's
+`RegisterHook` cannot suppress, its dispatcher always calls the original.
+The detour handles both entry modes: Blueprint bytecode (steps each param
+exactly once via `StepCompiledIn`, because param expressions may have side
+effects) and ProcessEvent (params pre-marshalled; also how our own
+pass-through re-enters). Compiles clean; **suppression is unverified in
+game** — the explicit test is: type `/s test` in the native box while another
+account watches; the line must appear in neither player's Palworld chat.
+
+**The plain-text decision (owner's, final):** text without a leading slash in
+the native box is never touched — it goes to ordinary Palworld chat, so the
+mod can never swallow a message meant for someone without it installed. Only
+slash tokens registered by `main.lua` via `rp_hook_set_commands` are claimed;
+unknown slash text passes through too. Until Lua registers the list the hook
+claims nothing (fail-open). `main.lua` remains the only command parser —
+routed text joins the same queue as the ImGui input box.
+
+Every send through the hook logs `category=N` to the RP Chat window's
+scrollback — reading those off during the backend round-trip session closes
+discovery's last gap. Keybinds: **F9** toggles the RP window (chat mod),
+**F7**/**F6** belong to the discovery mod (scan / byte logger).
 
 Also seen and worth knowing: `/Script/Pal.PalCheatManager:SendChatToBroadcast`
 and `/Script/Pal.PalUtility:SendSystemToPlayerChat[_Localize]` (a system-line

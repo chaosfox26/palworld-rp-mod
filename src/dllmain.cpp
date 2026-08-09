@@ -19,6 +19,7 @@
 //   * Text typed in the window goes into a queue Lua drains, rather than being
 //     sent directly, so command parsing lives in exactly one place.
 
+#include "chathook.hpp"
 #include "key.h"
 #include "net.hpp"
 
@@ -408,6 +409,22 @@ namespace
             g_ui.visible = !g_ui.visible;
             return 0;
         });
+
+        // ---- native chat hook -------------------------------------------
+
+        // rp_hook_set_commands(csv) — main.lua tells the hook which slash
+        // tokens it owns. Until called, the hook claims nothing (fail-open),
+        // so Palworld's chat can never lose a message to a half-loaded mod.
+        lua.register_function("rp_hook_set_commands", [](const LuaMadeSimple::Lua& lua) -> int {
+            rp::chathook::setCommands(std::string{lua.get_string()});
+            return 0;
+        });
+
+        // rp_hook_status() -> bool — lets /help say whether the native box works.
+        lua.register_function("rp_hook_status", [](const LuaMadeSimple::Lua& lua) -> int {
+            lua.set_bool(rp::chathook::installed());
+            return 1;
+        });
     }
 } // namespace
 
@@ -431,6 +448,10 @@ public:
 
     ~PalworldRpMod() override
     {
+        // Put EnterChat's real function pointer back before the DLL unloads,
+        // or the game calls into freed code on the next chat message.
+        rp::chathook::uninstall();
+
         // Join the worker before the DLL unloads, or its thread outlives the code
         // it is running.
         if (g_net) g_net->stop();
@@ -440,6 +461,21 @@ public:
     void on_unreal_init() override
     {
         uiLog("RP chat loaded. Open the RP Chat tab, then log in.");
+
+        // Native chat-box hook. Failure is a logged degradation, not an error:
+        // everything works from the ImGui window without it.
+        rp::chathook::install({
+            // route: recognised slash text from the native box joins the same
+            // queue the ImGui input uses, so Lua's dispatcher stays the only
+            // command parser.
+            [](std::string text) {
+                std::lock_guard<std::mutex> lock(g_ui.mutex);
+                g_ui.submitted.push_back(std::move(text));
+            },
+            // log: to the ImGui scrollback, where the category byte values
+            // will be read off during the next in-game session.
+            [](std::string line) { uiLog(line); },
+        });
     }
 
     // The only correct place for ImGui setup.
