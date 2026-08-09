@@ -29,6 +29,20 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 # free, since it is UE4SS's own build tree doing it.
 target_link_libraries(${TARGET} PUBLIC UE4SS)
 
+# UE4SS builds under custom configuration names (Game__Shipping__Win64 and
+# friends). vcpkg's imported targets only carry Debug and Release, and CMake
+# cannot guess which one an unrecognised config resembles — left to itself it
+# picks the Debug import, which then fails to link against our release objects
+# with a wall of LNK2038 "_ITERATOR_DEBUG_LEVEL"/"RuntimeLibrary" mismatches.
+# Map the active config explicitly, preferring the matching flavour and falling
+# back to the other so a missing debug build of a port is not fatal.
+string(TOUPPER "${CMAKE_BUILD_TYPE}" RP_CONFIG_UPPER)
+if(CMAKE_BUILD_TYPE MATCHES "Debug")
+    set(CMAKE_MAP_IMPORTED_CONFIG_${RP_CONFIG_UPPER} Debug Release "")
+else()
+    set(CMAKE_MAP_IMPORTED_CONFIG_${RP_CONFIG_UPPER} Release Debug "")
+endif()
+
 find_package(ixwebsocket CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 target_link_libraries(${TARGET} PRIVATE ixwebsocket::ixwebsocket nlohmann_json::nlohmann_json)

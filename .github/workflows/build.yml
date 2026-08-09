@@ -121,6 +121,14 @@ jobs:
       # what makes the toolchain file below install these automatically during
       # cmake configure. ixwebsocket's vcpkg port already selects mbedTLS as
       # its default SSL backend on Windows, matching the old `ssl = "mbedtls"`.
+      #
+      # The triplet is x64-windows-static-md, not the default x64-windows.
+      # x64-windows builds the ports as DLLs, which left PalworldRpChat.dll with
+      # a runtime dependency on z.dll (zlib, pulled in by ixwebsocket) — and the
+      # artifact deliberately ships only our own DLL and Lua, so the mod would
+      # have failed to load in game. static-md links the ports in statically
+      # while keeping the dynamic release CRT that UE4SS itself uses, so the
+      # DLL is self-contained without an /MT vs /MD mismatch.
       - name: Write the top-level CMake project
         shell: bash
         run: |
@@ -144,7 +152,7 @@ jobs:
           cmake -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Game__Shipping__Win64
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=x64-windows
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
 
       - name: Build
         run: cmake --build build --target PalworldRpChat

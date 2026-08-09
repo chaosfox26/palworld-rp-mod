@@ -242,8 +242,8 @@ namespace
 
         // rp_login(name, password, registerNew)
         lua.register_function("rp_login", [](const LuaMadeSimple::Lua& lua) -> int {
-            const std::string name = lua.get_string();
-            const std::string password = lua.get_string();
+            const std::string name{lua.get_string()};
+            const std::string password{lua.get_string()};
             const bool registerNew = lua.get_bool();
             if (g_net) g_net->submitAuth(name, password, registerNew);
             return 0;
@@ -260,10 +260,10 @@ namespace
         // far side. The key is never handed to Lua, so no other Lua mod sharing
         // this process can read it out of our state.
         lua.register_function("rp_send", [](const LuaMadeSimple::Lua& lua) -> int {
-            const std::string command = lua.get_string();
-            const std::string target = lua.get_string();
-            const std::string channel = lua.get_string();
-            const std::string message = lua.get_string();
+            const std::string command{lua.get_string()};
+            const std::string target{lua.get_string()};
+            const std::string channel{lua.get_string()};
+            const std::string message{lua.get_string()};
             if (g_net) g_net->submitChat(command, target, channel, message);
             return 0;
         });
@@ -279,7 +279,7 @@ namespace
 
         // rp_who(query, requestId)
         lua.register_function("rp_who", [](const LuaMadeSimple::Lua& lua) -> int {
-            const std::string query = lua.get_string();
+            const std::string query{lua.get_string()};
             const auto id = lua.get_integer();
             if (g_net) g_net->submitWho(query, id);
             return 0;
@@ -287,8 +287,8 @@ namespace
 
         // rp_party(action, code, requestId)
         lua.register_function("rp_party", [](const LuaMadeSimple::Lua& lua) -> int {
-            const std::string action = lua.get_string();
-            const std::string code = lua.get_string();
+            const std::string action{lua.get_string()};
+            const std::string code{lua.get_string()};
             const auto id = lua.get_integer();
             if (g_net) g_net->submitParty(action, code, id);
             return 0;
@@ -300,9 +300,9 @@ namespace
         // REQUIRE_ENCRYPTION on, a plaintext profile body is rejected. Response
         // bodies that arrive as envelopes are decrypted before Lua sees them.
         lua.register_function("rp_rest", [](const LuaMadeSimple::Lua& lua) -> int {
-            const std::string method = lua.get_string();
-            const std::string path = lua.get_string();
-            const std::string body = lua.get_string();
+            const std::string method{lua.get_string()};
+            const std::string path{lua.get_string()};
+            const std::string body{lua.get_string()};
             const auto id = lua.get_integer();
             const bool encryptBody = lua.get_bool();
             if (g_net) g_net->submitRest(method, path, body, id, encryptBody);
@@ -344,7 +344,7 @@ namespace
 
         // rp_ui_log(line) — Lua formats, the window displays.
         lua.register_function("rp_ui_log", [](const LuaMadeSimple::Lua& lua) -> int {
-            uiLog(lua.get_string());
+            uiLog(std::string{lua.get_string()});
             return 0;
         });
 
@@ -363,8 +363,8 @@ namespace
         });
 
         lua.register_function("rp_ui_set_status", [](const LuaMadeSimple::Lua& lua) -> int {
-            const std::string status = lua.get_string();
-            const std::string err = lua.get_string();
+            const std::string status{lua.get_string()};
+            const std::string err{lua.get_string()};
             std::lock_guard<std::mutex> lock(g_ui.mutex);
             g_ui.status = status;
             g_ui.lastError = err;
