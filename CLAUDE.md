@@ -272,6 +272,16 @@ crashed game. The safe tools are: the plain `ForEachUObject` name scan
 the remaining gaps are being closed. UE4SS's C++ Header Dumper (a different
 code path from `DumpAllObjects`) is the untried fallback if those fail.
 
+**A third crash refined the call-time rule: hooks install fine and fire fine,
+but calling `:get()` on `EnterChat`'s FText parameter from a Lua hook faults
+— and pcall cannot catch a native access violation, so "defensive" Lua is not
+a defence.** Hook callbacks must be position-aware and touch only parameters
+known to be POD (the Category enum/byte). Message text has not been readable
+from Lua so far; FString params are untested-by-choice. **Design consequence
+for step 2:** the production hook needs the message text, so plan it in C++
+(`RegisterHook` on the C++ side, where FText is handled as a real type), not
+in Lua — or prove FString reads safe first via `EnterChat_Receive`.
+
 **The chat widget** — one live instance in a session:
 
 - `WBP_Ingame_Chat_C` at
