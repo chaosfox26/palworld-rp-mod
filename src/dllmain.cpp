@@ -193,28 +193,61 @@ namespace
             }
         }
 
-        ImGui::InputTextMultiline("##rp_input",
-                                  g_ui.input.data(),
-                                  g_ui.input.size(),
-                                  ImVec2(-1, ImGui::GetTextLineHeight() * 4.0f));
+        // Enter sends, Ctrl+Enter makes a newline.
+        //
+        // ImGui's default for a multiline box is the opposite, which is wrong for
+        // a chat window: the common case is one line and send. Long-form writers
+        // still get newlines, just with a modifier.
+        const ImGuiInputTextFlags inputFlags =
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CtrlEnterForNewLine;
+
+        const bool enterPressed = ImGui::InputTextMultiline(
+            "##rp_input",
+            g_ui.input.data(),
+            g_ui.input.size(),
+            ImVec2(-1, ImGui::GetTextLineHeight() * 4.0f),
+            inputFlags);
 
         const size_t used = strnlen(g_ui.input.data(), g_ui.input.size());
         ImGui::Text("%zu / %d bytes", used, cap);
         ImGui::SameLine();
-        ImGui::TextDisabled("|  the game's own chat box cannot hold this much, which is why this window exists");
+        ImGui::TextDisabled("|  Enter sends, Ctrl+Enter for a new line");
 
-        const bool canSend = (st == rp::Status::Ready) && used > 0;
+        const bool ready = (st == rp::Status::Ready);
+        const bool canSend = ready && used > 0;
+
         if (!canSend) ImGui::BeginDisabled();
-        if (ImGui::Button("Send"))
+        const bool buttonPressed = ImGui::Button("Send");
+        if (!canSend) ImGui::EndDisabled();
+
+        // A disabled button with no explanation just looks broken. Say why.
+        if (!ready)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.35f, 1.0f),
+                               "Log in first — status is %s, and sending needs Ready.",
+                               rp::statusName(st));
+        }
+        else if (used == 0)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Type something to send.");
+        }
+        else
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("/s /em /w /p /g /gl /1-/10 /who /party");
+        }
+
+        if (canSend && (buttonPressed || enterPressed))
         {
             std::lock_guard<std::mutex> lock(g_ui.mutex);
             g_ui.submitted.emplace_back(g_ui.input.data(), used);
             g_ui.input[0] = '\0';
+            // Keep focus in the box so a conversation does not need a click
+            // between every line.
+            ImGui::SetKeyboardFocusHere(-1);
         }
-        if (!canSend) ImGui::EndDisabled();
-
-        ImGui::SameLine();
-        ImGui::TextDisabled("/s /em /w /p /g /gl /1-/10 /who /party");
     }
 
     // ------------------------------------------------------------- Lua bindings
