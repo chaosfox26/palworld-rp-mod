@@ -245,7 +245,7 @@ namespace rp
                 // GET, POST and DELETE are the only verbs the backend exposes.
                 std::string verb = ix::HttpClient::kGet;
                 if (method == "POST") verb = ix::HttpClient::kPost;
-                else if (method == "DELETE") verb = ix::HttpClient::kDel;
+                else if (method == "DELETE") verb = ix::HttpClient::kDelete;
 
                 auto resp = http.request(url, verb, body, args);
                 RestResult r;

@@ -32,6 +32,14 @@
 
 #include <Mod/CppUserModBase.hpp>
 
+// CppUserModBase.hpp only forward-declares LuaMadeSimple::Lua (enough for the
+// reference parameters in its own signatures); calling member functions like
+// register_function/get_string/set_bool needs the full definition.
+#include <LuaMadeSimple/LuaMadeSimple.hpp>
+
+// UE4SS_ENABLE_IMGUI() lives here, not in CppUserModBase.hpp.
+#include <UE4SSProgram.hpp>
+
 #include <imgui.h>
 
 using namespace RC;
